@@ -1,3 +1,5 @@
+from typing import Optional
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -10,8 +12,10 @@ MODE_STYLE = {"llm": "bold cyan", "fast": "bold yellow"}
 EVENT_STYLE = {"funded": "cyan", "swept": "green", "hand_complete": "dim", "error": "bold red"}
 
 
-def signed_in(base_url: str) -> None:
+def signed_in(base_url: str, wallet_address: Optional[str] = None) -> None:
     console.print(f"[bold green]♠[/bold green] Signed in to [bold]{base_url}[/bold].")
+    if wallet_address:
+        console.print(f"[dim]wallet: {wallet_address}[/dim]")
 
 
 def agents_table(agents: list) -> None:

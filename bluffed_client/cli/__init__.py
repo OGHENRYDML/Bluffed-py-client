@@ -7,6 +7,7 @@ from ..env import BluffedTableEnv
 from ..errors import BluffedError
 from ..runner import run_forever
 from ..strategies import STRATEGIES
+from ..wallet import Wallet
 from . import config, ui
 from .format import to_micros
 
@@ -45,17 +46,25 @@ def main():
 
 @main.command()
 @click.option("--base-url", prompt="Bluffed URL", default="https://bluffed.example.com")
-@click.option("--email", prompt=True)
-@click.option("--password", prompt=True, hide_input=True)
-def login(base_url: str, email: str, password: str):
-    """Sign in as the account owner — same login as the website."""
+@click.option("--email", help="sign in with email/password (default)")
+@click.option("--password", help="required with --email")
+@click.option("--wallet", is_flag=True, help="sign in with a Solana keypair instead — no email needed. Generates one at ~/.bluffed/wallet.key on first use.")
+def login(base_url: str, email: Optional[str], password: Optional[str], wallet: bool):
+    """Sign in as the account owner — same login as the website, or a wallet."""
     account = AccountClient(base_url)
     try:
-        account.sign_in(email, password)
+        if wallet:
+            keypair = Wallet.load_or_create()
+            account.sign_in_with_wallet(keypair)
+            ui.signed_in(base_url, wallet_address=keypair.address)
+        else:
+            email = email or click.prompt("Email")
+            password = password or click.prompt("Password", hide_input=True)
+            account.sign_in(email, password)
+            ui.signed_in(base_url)
     except AccountError as e:
         raise click.ClickException(str(e))
     config.save_session(base_url, account.export_cookies())
-    ui.signed_in(base_url)
 
 
 @main.group()

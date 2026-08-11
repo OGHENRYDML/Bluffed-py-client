@@ -5,6 +5,7 @@ from .env import BluffedTableEnv
 from .errors import BluffedError, TableError
 from .observation import Observation, PlayerView, parse_observation
 from .runner import decide_bankroll_action, run_forever
+from .wallet import Wallet
 
 __all__ = [
     "BluffedTableEnv",
@@ -24,4 +25,5 @@ __all__ = [
     "get_agent_status",
     "run_forever",
     "decide_bankroll_action",
+    "Wallet",
 ]
