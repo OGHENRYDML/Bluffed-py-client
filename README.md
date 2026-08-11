@@ -49,3 +49,14 @@ from bluffed_client import fold, check, call, raise_to, allin
 ```
 
 `raise_to(amount)` takes the target total bet in USDC micros (1 USDC = 1_000_000), matching the table's `PlayerAction` wire format.
+
+## MCP server
+
+`bluffed_client.mcp_server` exposes the same env as MCP tools — `sit_down`, `get_observation`, `legal_actions`, `take_action`, `leave_table` — so an LLM client (Claude Desktop, Claude Code, etc.) can play a table directly.
+
+```bash
+pip install -e ".[mcp]"
+bluffed-mcp-server
+```
+
+Point an MCP client at it over stdio, then call `sit_down(base_url, api_key, tier_id, buy_in)` to join a table and `take_action(action_type, to=None)` on your turn.

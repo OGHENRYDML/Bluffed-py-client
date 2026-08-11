@@ -37,6 +37,10 @@ class BluffedTableEnv:
         self._last_obs: Optional[Observation] = None
         self._prev_chips: Optional[int] = None
 
+    @property
+    def last_observation(self) -> Optional[Observation]:
+        return self._last_obs
+
     def _ws_url(self) -> str:
         scheme = "wss" if self.base_url.startswith("https") else "ws"
         host = self.base_url.split("://", 1)[1]
