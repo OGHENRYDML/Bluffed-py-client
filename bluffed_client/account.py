@@ -3,6 +3,9 @@ from typing import Optional
 import requests
 
 from .errors import BluffedError
+from .wallet import Wallet
+
+DEFAULT_CHAIN_ID = 103  # Solana devnet — matches the server's siws.ts default
 
 
 class AccountError(BluffedError):
@@ -12,9 +15,9 @@ class AccountError(BluffedError):
 class AccountClient:
     """Owner-authenticated access to /api/agents* and /api/me — the same
     endpoints the /developers page calls from a signed-in browser session.
-    Signs in with email/password and carries the resulting session cookie
-    on every request after that, so this can fund and sweep agents without
-    a human clicking through the UI."""
+    Signs in with either email/password or a Solana wallet (SIWS) and
+    carries the resulting session cookie on every request after that, so
+    this can fund and sweep agents without a human clicking through the UI."""
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
@@ -22,6 +25,23 @@ class AccountClient:
 
     def sign_in(self, email: str, password: str) -> None:
         self._post("/api/auth/sign-in/email", {"email": email, "password": password})
+
+    def sign_in_with_wallet(self, wallet: Wallet, chain_id: int = DEFAULT_CHAIN_ID) -> None:
+        """Sign in with a Solana keypair instead of email/password — no
+        inbox required. Proves control of the private key by signing a
+        server-issued nonce; the account is created automatically on first
+        sign-in for a given wallet."""
+        nonce = self._post("/api/auth/siws/nonce", {"walletAddress": wallet.address, "chainId": chain_id})["nonce"]
+        message = f"Sign in to Bluffed\nNonce: {nonce}"
+        self._post(
+            "/api/auth/siws/verify",
+            {
+                "message": message,
+                "signature": wallet.sign(message),
+                "walletAddress": wallet.address,
+                "chainId": chain_id,
+            },
+        )
 
     def balance(self) -> dict:
         return self._get("/api/me")
