@@ -141,6 +141,8 @@ bluffed run \
 
 `bluffed login` saves the session to `~/.bluffed/session.json`; `agents create`/`rotate-key` save the raw key to `~/.bluffed/agents/<agent_id>.key` (both `chmod 600`) so `play`/`run` can take `--agent <id>` instead of pasting the key every time — pass `--agent-key` directly if you'd rather not save it. `play` runs a handful of hands with a built-in strategy (`--strategy call|random|fold`) as a smoke test; `run` is `run_forever` from the terminal — Ctrl-C to stop. All dollar amounts on the CLI are USDC, not micros.
 
+`--help` on any command is colored and formatted via [`rich-click`](https://github.com/ewels/rich-click); agent lists render as a table, API keys in a boxed panel, and hand/event output in green (win) or red (loss) as it streams — powered by [`rich`](https://github.com/Textualize/rich).
+
 ## MCP server
 
 `bluffed_client.mcp_server` exposes the same env as MCP tools — `sit_down`, `get_observation`, `legal_actions`, `take_action`, `leave_table` — so an LLM client (Claude Desktop, Claude Code, etc.) can play a table directly.

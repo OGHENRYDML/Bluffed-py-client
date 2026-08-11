@@ -1,21 +1,22 @@
 from typing import Optional
 
-import click
+import rich_click as click
 
 from ..account import AccountClient, AccountError
 from ..env import BluffedTableEnv
 from ..errors import BluffedError
 from ..runner import run_forever
 from ..strategies import STRATEGIES
-from . import config
+from . import config, ui
+from .format import to_micros
 
-
-def to_micros(amount: float) -> int:
-    return round(amount * 1_000_000)
-
-
-def fmt_usdc(micros: int) -> str:
-    return f"${micros / 1_000_000:,.2f}"
+click.rich_click.USE_RICH_MARKUP = True
+click.rich_click.STYLE_OPTION = "bold cyan"
+click.rich_click.STYLE_SWITCH = "bold green"
+click.rich_click.STYLE_METAVAR = "bold yellow"
+click.rich_click.STYLE_HEADER_TEXT = "bold green"
+click.rich_click.STYLE_ERRORS_SUGGESTION = "dim"
+click.rich_click.MAX_WIDTH = 100
 
 
 def _account_from_session() -> AccountClient:
@@ -39,7 +40,7 @@ def _resolve_key(agent_id: Optional[str], agent_key: Optional[str]) -> str:
 
 @click.group()
 def main():
-    """Bluffed — play and manage poker agents from the command line."""
+    """[bold green]♠ Bluffed[/bold green] — play and manage poker agents from the command line."""
 
 
 @main.command()
@@ -54,7 +55,7 @@ def login(base_url: str, email: str, password: str):
     except AccountError as e:
         raise click.ClickException(str(e))
     config.save_session(base_url, account.export_cookies())
-    click.echo(f"Signed in to {base_url}.")
+    ui.signed_in(base_url)
 
 
 @main.group()
@@ -66,8 +67,7 @@ def agents():
 def agents_list():
     """List your agents with their mode and balance."""
     account = _account_from_session()
-    for a in account.list_agents():
-        click.echo(f"{a['id']}  {a['name']:<20} {a['mode']:<5} {fmt_usdc(a['availableMicros']):>10}  {a['handsWon']} hands")
+    ui.agents_table(account.list_agents())
 
 
 @agents.command("create")
@@ -78,11 +78,9 @@ def agents_create(name: str, mode: str, save_key: bool):
     """Create a new agent."""
     account = _account_from_session()
     result = account.create_agent(name, mode)
-    click.echo(f"Created agent {result['agentId']}")
-    click.echo(f"API key (shown once): {result['apiKey']}")
-    if save_key:
-        path = config.save_agent_key(result["agentId"], result["apiKey"])
-        click.echo(f"Saved to {path}")
+    ui.agent_created(result["agentId"], mode)
+    path = config.save_agent_key(result["agentId"], result["apiKey"]) if save_key else None
+    ui.key_reveal(result["apiKey"], path)
 
 
 @agents.command("fund")
@@ -91,8 +89,9 @@ def agents_create(name: str, mode: str, save_key: bool):
 def agents_fund(agent_id: str, amount: float):
     """Move USDC from your balance into an agent."""
     account = _account_from_session()
-    account.fund(agent_id, to_micros(amount))
-    click.echo(f"Funded {agent_id} with {fmt_usdc(to_micros(amount))}.")
+    micros = to_micros(amount)
+    account.fund(agent_id, micros)
+    ui.fund_result(agent_id, micros)
 
 
 @agents.command("sweep")
@@ -103,7 +102,7 @@ def agents_sweep(agent_id: str, amount: Optional[float]):
     account = _account_from_session()
     micros = to_micros(amount) if amount is not None else None
     account.sweep(agent_id, micros)
-    click.echo(f"Swept {agent_id}" + (f" for {fmt_usdc(micros)}." if micros is not None else " (all)."))
+    ui.sweep_result(agent_id, micros)
 
 
 @agents.command("rotate-key")
@@ -112,8 +111,8 @@ def agents_rotate_key(agent_id: str):
     """Revoke an agent's current key and issue a new one."""
     account = _account_from_session()
     result = account.rotate_key(agent_id)
-    click.echo(f"New API key (shown once): {result['apiKey']}")
     config.save_agent_key(agent_id, result["apiKey"])
+    ui.key_reveal(result["apiKey"], saved_path=None)
 
 
 @main.command()
@@ -138,7 +137,7 @@ def play(base_url: str, agent_id: Optional[str], agent_key: Optional[str], tier:
                 hand_reward += reward
                 if terminated or truncated:
                     break
-            click.echo(f"hand {i + 1}/{hands}: {obs.phase}  reward={hand_reward:+.0f} micros")
+            ui.hand_result(i + 1, hands, obs.phase, hand_reward)
             env.leave()
     except BluffedError as e:
         raise click.ClickException(str(e))
@@ -174,9 +173,6 @@ def run(
     account = _account_from_session()
     env = BluffedTableEnv(base_url=base_url, api_key=key, tier_id=tier, buy_in=to_micros(buy_in))
 
-    def on_event(kind: str, data: dict):
-        click.echo(f"[{kind}] {data}")
-
     try:
         run_forever(
             env,
@@ -187,9 +183,9 @@ def run(
             top_up_to=to_micros(top_up_to),
             sweep_above=to_micros(sweep_above) if sweep_above is not None else None,
             sweep_down_to=to_micros(sweep_down_to) if sweep_down_to is not None else None,
-            on_event=on_event,
+            on_event=ui.event,
         )
     except KeyboardInterrupt:
-        click.echo("stopped.")
+        ui.stopped()
     finally:
         env.close()
