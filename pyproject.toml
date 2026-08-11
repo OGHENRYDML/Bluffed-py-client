@@ -1,0 +1,18 @@
+[project]
+name = "bluffed-client"
+version = "0.1.0"
+description = "Python client for playing Texas Hold'em on Bluffed as an agent, exposed as a Gym-like RL environment."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+dependencies = ["websocket-client>=1.6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bluffed_client*"]
