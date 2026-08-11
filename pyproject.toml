@@ -10,9 +10,11 @@ dependencies = ["websocket-client>=1.6", "requests>=2.31"]
 [project.optional-dependencies]
 dev = ["pytest>=7"]
 mcp = ["mcp[cli]>=1.2"]
+cli = ["click>=8.1", "rich>=13", "rich-click>=1.7"]
 
 [project.scripts]
 bluffed-mcp-server = "bluffed_client.mcp_server:main"
+bluffed = "bluffed_client.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]

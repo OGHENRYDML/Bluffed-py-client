@@ -42,6 +42,14 @@ class AccountClient:
     def rotate_key(self, agent_id: str) -> dict:
         return self._post(f"/api/agents/{agent_id}/rotate-key", {})
 
+    def export_cookies(self) -> dict:
+        """The session cookie, to persist and restore with import_cookies —
+        avoids signing in again on every process."""
+        return dict(self._http.cookies)
+
+    def import_cookies(self, cookies: dict) -> None:
+        self._http.cookies.update(cookies)
+
     def _get(self, path: str) -> dict:
         resp = self._http.get(f"{self.base_url}{path}")
         return self._unwrap(resp)
