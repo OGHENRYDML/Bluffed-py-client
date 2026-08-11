@@ -1,10 +1,15 @@
 # bluffed-client
 
-Python client for playing poker on [Bluffed](https://github.com/OGHENRYDML/bluffed-web) as an agent, exposed as a gym-like reinforcement learning environment: `reset()` / `step(action)`.
+Python client for playing poker on [Bluffed](https://github.com/OGHENRYDML/bluffed-web) as an agent, exposed as a gym-like reinforcement learning environment: `reset()` / `step(action)`. Also ships an MCP server, so an LLM client can play a table directly without writing any of this code.
 
-It connects to the same WebSocket the product uses for agent seats — `wss://<host>/api/agent/table/{tier_id}/connect` — authenticated with an agent API key created from the owner's account (Agents page, or the `/api/agents` endpoints).
+Full wire protocol: [`bluffed-web/docs/AGENTS.md`](https://github.com/OGHENRYDML/bluffed-web/blob/main/docs/AGENTS.md).
 
-It isn't a `gymnasium.Env` subclass. Poker is multiplayer and turn-based, so `step()` is only valid on the agent's own turn; internally `reset()`/`step()` block and drain the socket through other seats' turns until control comes back to the agent, or the hand ends.
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Observation](#observation)
+- [Action](#action)
+- [Errors](#errors)
+- [MCP server](#mcp-server)
 
 ## Install
 
@@ -12,7 +17,11 @@ It isn't a `gymnasium.Env` subclass. Poker is multiplayer and turn-based, so `st
 pip install -e .
 ```
 
-## Usage
+Requires Python 3.9+. One dependency: [`websocket-client`](https://pypi.org/project/websocket-client/).
+
+Before using this, create an agent on Bluffed (`/developers`) and pick its **mode** there — `llm` or `fast`. Mode is a property of the agent, set once at creation; it decides which pool of tables it plays at, not anything passed to this client.
+
+## Quickstart
 
 ```python
 from bluffed_client import BluffedTableEnv, fold, call, raise_to
@@ -38,9 +47,23 @@ while True:
 env.close()
 ```
 
+`BluffedTableEnv` isn't a `gymnasium.Env` subclass. Poker is multiplayer and turn-based, so `step()` is only valid on the agent's own turn; internally, `reset()`/`step()` block and drain the socket through other seats' turns until control comes back to the agent, or the hand ends. `step()` raises `BluffedError` if called when it isn't your turn — check `obs.my_turn` first.
+
+If your agent's mode is `fast`, the table enforces a 5-second clock per turn — if `step()` doesn't get called in time, the table checks or folds for you and the next observation just reflects that. There's no such clock for `llm`-mode agents.
+
 ## Observation
 
-`obs` is a `bluffed_client.Observation`: phase, community cards, pot, current bet/min raise, and a `players` list of `PlayerView` (seat, chips, bet, folded/all-in, hole cards — your own are always visible, others only at showdown). `obs.me`, `obs.my_turn`, and `obs.hand_over` are convenience properties; `obs.legal_actions()` is a best-effort action list, not authoritative — the table always has the final say and will error out an illegal action.
+`obs` is a `bluffed_client.Observation`:
+
+| Field | Type | |
+| --- | --- | --- |
+| `phase` | `str` | `waiting`, `preflop`, `flop`, `turn`, `river`, `showdown`, `handComplete` |
+| `community` | `list[str]` | card codes, e.g. `"As"`, `"Th"`, `"2c"` |
+| `pot`, `current_bet`, `min_raise` | `int` | USDC micros |
+| `players` | `list[PlayerView]` | seat, chips, bet, folded/all-in, hole cards |
+| `winners`, `log` | | last hand's result / recent event lines |
+
+Your own `hole_cards` are always visible; other players' are `["??", "??"]` until showdown. Convenience properties: `obs.me` (your own `PlayerView`, or `None`), `obs.my_turn`, `obs.hand_over`. `obs.legal_actions()` is a best-effort action list, not authoritative — the table always has final say and errors out an illegal action.
 
 ## Action
 
@@ -48,7 +71,15 @@ env.close()
 from bluffed_client import fold, check, call, raise_to, allin
 ```
 
-`raise_to(amount)` takes the target total bet in USDC micros (1 USDC = 1_000_000), matching the table's `PlayerAction` wire format.
+`raise_to(amount)` takes the target total bet in USDC micros (1 USDC = 1,000,000), matching the table's `PlayerAction` wire format — not a delta.
+
+## Errors
+
+```python
+from bluffed_client import BluffedError, TableError
+```
+
+`BluffedError` covers client-side problems (not connected, timed out, called out of turn). `TableError` wraps a rejection from the table itself — `err.code` is one of the codes listed in [AGENTS.md § Error codes](https://github.com/OGHENRYDML/bluffed-web/blob/main/docs/AGENTS.md#6-error-codes) (`insufficient_balance`, `not_your_turn`, `raise_too_small`, etc.).
 
 ## MCP server
 
