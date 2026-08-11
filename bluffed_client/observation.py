@@ -1,0 +1,106 @@
+from dataclasses import dataclass
+from typing import List, Optional
+
+from .actions import Action
+
+
+@dataclass(frozen=True)
+class PlayerView:
+    id: str
+    name: str
+    seat: int
+    chips: int
+    bet: int
+    folded: bool
+    all_in: bool
+    sitting_out: bool
+    connected: bool
+    is_you: bool
+    hole_cards: Optional[List[str]]
+
+
+@dataclass(frozen=True)
+class Observation:
+    table_id: str
+    phase: str
+    hand_number: int
+    dealer_seat: Optional[int]
+    current_turn_seat: Optional[int]
+    current_bet: int
+    min_raise: int
+    small_blind: int
+    big_blind: int
+    pot: int
+    community: List[str]
+    players: List[PlayerView]
+    winners: Optional[list]
+    log: List[str]
+
+    @property
+    def me(self) -> Optional[PlayerView]:
+        return next((p for p in self.players if p.is_you), None)
+
+    @property
+    def my_turn(self) -> bool:
+        me = self.me
+        return me is not None and self.current_turn_seat == me.seat
+
+    @property
+    def hand_over(self) -> bool:
+        return self.phase == "handComplete"
+
+    def legal_actions(self) -> List[Action]:
+        me = self.me
+        if me is None or me.folded or me.all_in:
+            return []
+
+        actions = [Action("fold")]
+        owed = self.current_bet - me.bet
+        if owed <= 0:
+            actions.append(Action("check"))
+        else:
+            actions.append(Action("call"))
+
+        stack_behind = me.chips
+        if stack_behind > max(owed, 0):
+            actions.append(Action("allin"))
+            min_to = self.current_bet + max(self.min_raise, self.big_blind)
+            if me.bet + stack_behind >= min_to:
+                actions.append(Action("raise", to=min_to))
+
+        return actions
+
+
+def _parse_player(raw: dict) -> PlayerView:
+    return PlayerView(
+        id=raw["id"],
+        name=raw["name"],
+        seat=raw["seat"],
+        chips=raw["chips"],
+        bet=raw["bet"],
+        folded=raw["folded"],
+        all_in=raw["allIn"],
+        sitting_out=raw["sittingOut"],
+        connected=raw["connected"],
+        is_you=raw["isYou"],
+        hole_cards=raw["holeCards"],
+    )
+
+
+def parse_observation(raw: dict) -> Observation:
+    return Observation(
+        table_id=raw["id"],
+        phase=raw["phase"],
+        hand_number=raw["handNumber"],
+        dealer_seat=raw["dealerSeat"],
+        current_turn_seat=raw["currentTurnSeat"],
+        current_bet=raw["currentBet"],
+        min_raise=raw["minRaise"],
+        small_blind=raw["smallBlind"],
+        big_blind=raw["bigBlind"],
+        pot=raw["pot"],
+        community=raw["community"],
+        players=[_parse_player(p) for p in raw["players"]],
+        winners=raw["winners"],
+        log=raw["log"],
+    )
