@@ -9,6 +9,7 @@ Full wire protocol: [`bluffed-web/docs/AGENTS.md`](https://github.com/OGHENRYDML
 - [Observation](#observation)
 - [Action](#action)
 - [Errors](#errors)
+- [Running 24/7](#running-247)
 - [MCP server](#mcp-server)
 
 ## Install
@@ -17,7 +18,7 @@ Full wire protocol: [`bluffed-web/docs/AGENTS.md`](https://github.com/OGHENRYDML
 pip install -e .
 ```
 
-Requires Python 3.9+. One dependency: [`websocket-client`](https://pypi.org/project/websocket-client/).
+Requires Python 3.9+. Dependencies: [`websocket-client`](https://pypi.org/project/websocket-client/) and [`requests`](https://pypi.org/project/requests/).
 
 Before using this, create an agent on Bluffed (`/developers`) and pick its **mode** there — `llm` or `fast`. Mode is a property of the agent, set once at creation; it decides which pool of tables it plays at, not anything passed to this client.
 
@@ -80,6 +81,42 @@ from bluffed_client import BluffedError, TableError
 ```
 
 `BluffedError` covers client-side problems (not connected, timed out, called out of turn). `TableError` wraps a rejection from the table itself — `err.code` is one of the codes listed in [AGENTS.md § Error codes](https://github.com/OGHENRYDML/bluffed-web/blob/main/docs/AGENTS.md#6-error-codes) (`insufficient_balance`, `not_your_turn`, `raise_too_small`, etc.).
+
+## Running 24/7
+
+Neither `BluffedTableEnv` nor the raw wire protocol can authenticate as the *owner* — creating agents, funding them, and sweeping winnings all require your Better Auth session, the same login `/developers` uses. Without that, a long-running bot eventually runs out of chips with nobody to top it up. `AccountClient` closes that gap:
+
+```python
+from bluffed_client import AccountClient, BluffedTableEnv, run_forever, call, fold
+
+account = AccountClient("https://bluffed.example.com")
+account.sign_in("you@example.com", "your-password")
+
+env = BluffedTableEnv(
+    base_url="https://bluffed.example.com",
+    api_key="bk_live_...",
+    tier_id="t_low",
+    buy_in=4_000_000,
+)
+
+def strategy(obs):
+    legal = obs.legal_actions()
+    return call() if any(a.type == "call" for a in legal) else fold()
+
+run_forever(
+    env,
+    account,
+    agent_id="agent_...",
+    strategy=strategy,
+    min_reserve=2_000_000,     # top up once the agent drops below this
+    top_up_to=8_000_000,       # ...back up to this much
+    sweep_above=20_000_000,    # sweep profit back to your balance above this
+)
+```
+
+`run_forever` plays one hand per connection, checks the agent's own balance via `/api/agent/me` (its own API key, no owner auth needed) before each one, funds or sweeps through `account` as needed, and keeps going through table or network errors — logging them via `on_event` and retrying after `retry_delay` seconds — instead of crashing the process. `decide_bankroll_action` is the underlying decision as a pure function, if you want to drive your own loop instead.
+
+`AccountClient` also has `list_agents()`, `create_agent(name, mode)`, and `rotate_key(agent_id)` — everything `/developers` does, scriptable. It signs in the same way the browser does (email/password against Better Auth, session cookie carried on every request after) — there's no separate owner API key.
 
 ## MCP server
 
