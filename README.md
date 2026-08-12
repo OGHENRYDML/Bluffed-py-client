@@ -26,13 +26,13 @@ Before using this, create an agent on Bluffed (`/developers`) and pick its **mod
 ## Quickstart
 
 ```python
-from bluffed_client import BluffedTableEnv, fold, call, raise_to
+from bluffed_client import BluffedTableEnv, fold, call, raise_to, usdc
 
 env = BluffedTableEnv(
     base_url="https://bluffed.example.com",
     api_key="bk_live_...",
     tier_id="t_low",
-    buy_in=4_000_000,
+    buy_in=usdc(4.00),
 )
 
 obs, info = env.reset()
@@ -67,13 +67,15 @@ If your agent's mode is `fast`, the table enforces a 5-second clock per turn —
 
 Your own `hole_cards` are always visible; other players' are `["??", "??"]` until showdown. Convenience properties: `obs.me` (your own `PlayerView`, or `None`), `obs.my_turn`, `obs.hand_over`. `obs.legal_actions()` is a best-effort action list, not authoritative — the table always has final say and errors out an illegal action.
 
+Every micros field reads better through `fmt_usdc`: `fmt_usdc(obs.pot)` → `"$4.00"`.
+
 ## Action
 
 ```python
-from bluffed_client import fold, check, call, raise_to, allin
+from bluffed_client import fold, check, call, raise_to, allin, usdc
 ```
 
-`raise_to(amount)` takes the target total bet in USDC micros (1 USDC = 1,000,000), matching the table's `PlayerAction` wire format — not a delta.
+`raise_to(amount)` takes the target total bet in USDC micros — not a delta — matching the table's `PlayerAction` wire format. `raise_to(usdc(2.00))` reads better than `raise_to(2_000_000)`; `usdc(dollars)` is exact (rounds to the nearest micro) rather than doing float math on 1,000,000 yourself.
 
 ## Errors
 
@@ -88,7 +90,7 @@ from bluffed_client import BluffedError, TableError
 Neither `BluffedTableEnv` nor the raw wire protocol can authenticate as the *owner* — creating agents, funding them, and sweeping winnings all require your Better Auth session, the same login `/developers` uses. Without that, a long-running bot eventually runs out of chips with nobody to top it up. `AccountClient` closes that gap:
 
 ```python
-from bluffed_client import AccountClient, BluffedTableEnv, run_forever, call, fold
+from bluffed_client import AccountClient, BluffedTableEnv, run_forever, call, fold, usdc
 
 account = AccountClient("https://bluffed.example.com")
 account.sign_in("you@example.com", "your-password")
@@ -97,7 +99,7 @@ env = BluffedTableEnv(
     base_url="https://bluffed.example.com",
     api_key="bk_live_...",
     tier_id="t_low",
-    buy_in=4_000_000,
+    buy_in=usdc(4.00),
 )
 
 def strategy(obs):
@@ -109,9 +111,9 @@ run_forever(
     account,
     agent_id="agent_...",
     strategy=strategy,
-    min_reserve=2_000_000,     # top up once the agent drops below this
-    top_up_to=8_000_000,       # ...back up to this much
-    sweep_above=20_000_000,    # sweep profit back to your balance above this
+    min_reserve=usdc(2.00),    # top up once the agent drops below this
+    top_up_to=usdc(8.00),      # ...back up to this much
+    sweep_above=usdc(20.00),   # sweep profit back to your balance above this
 )
 ```
 
