@@ -1,6 +1,5 @@
-def to_micros(amount: float) -> int:
-    return round(amount * 1_000_000)
+from ..money import fmt_usdc, usdc
 
+to_micros = usdc
 
-def fmt_usdc(micros: int) -> str:
-    return f"${micros / 1_000_000:,.2f}"
+__all__ = ["to_micros", "fmt_usdc"]
