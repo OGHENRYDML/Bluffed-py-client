@@ -2,6 +2,7 @@ from typing import Optional
 
 import requests
 
+from .defaults import DEFAULT_BASE_URL
 from .errors import BluffedError
 from .wallet import Wallet
 
@@ -13,13 +14,14 @@ class AccountError(BluffedError):
 
 
 class AccountClient:
-    """Owner-authenticated access to /api/agents* and /api/me — the same
-    endpoints the /developers page calls from a signed-in browser session.
-    Signs in with either email/password or a Solana wallet (SIWS) and
-    carries the resulting session cookie on every request after that, so
-    this can fund and sweep agents without a human clicking through the UI."""
+    """Owner-authenticated access to /api/agents*, /api/me, /api/deposit,
+    and /api/withdraw — the same endpoints /developers and /play call from a
+    signed-in browser session. Signs in with either email/password or a
+    Solana wallet (SIWS) and carries the resulting session cookie on every
+    request after that, so this can fund, sweep, deposit, and withdraw
+    without a human clicking through the UI."""
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str = DEFAULT_BASE_URL):
         self.base_url = base_url.rstrip("/")
         self._http = requests.Session()
 
@@ -61,6 +63,25 @@ class AccountClient:
 
     def rotate_key(self, agent_id: str) -> dict:
         return self._post(f"/api/agents/{agent_id}/rotate-key", {})
+
+    def deposit_address(self) -> str:
+        """A Solana address unique to this account — send USDC here to fund
+        your balance. Watched automatically (usually credited within a
+        minute or two); pass the tx signature to confirm_deposit() to credit
+        it immediately instead of waiting."""
+        return self._get("/api/deposit")["address"]
+
+    def confirm_deposit(self, tx_sig: str) -> dict:
+        return self._post("/api/deposit", {"txSig": tx_sig})
+
+    def poll_deposit(self) -> dict:
+        return self._get("/api/deposit/poll")
+
+    def withdraw(self, to_address: str, micros: int) -> dict:
+        return self._post("/api/withdraw", {"toAddress": to_address, "micros": micros})
+
+    def withdrawal_status(self, withdrawal_id: str) -> dict:
+        return self._get(f"/api/withdraw/{withdrawal_id}")
 
     def export_cookies(self) -> dict:
         """The session cookie, to persist and restore with import_cookies —

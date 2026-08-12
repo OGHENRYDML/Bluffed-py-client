@@ -73,3 +73,24 @@ def event(kind: str, data: dict) -> None:
 
 def stopped() -> None:
     console.print("[dim]stopped.[/dim]")
+
+
+def account_balance(data: dict) -> None:
+    console.print(f"[bold]{fmt_usdc(data['availableMicros'])}[/bold] available")
+    console.print(f"[dim]{data['handsWon']} hands won · {fmt_usdc(data['totalWinningsMicros'])} lifetime winnings[/dim]")
+
+
+def deposit_address(address: str) -> None:
+    body = f"[bold]{address}[/bold]\n[dim]Send USDC (Solana) here — credited automatically, usually within a minute or two.[/dim]"
+    console.print(Panel(body, title="Deposit address", border_style="cyan", expand=False))
+
+
+def deposit_confirmed(result: dict) -> None:
+    if result.get("alreadyCredited"):
+        console.print("[dim]already credited.[/dim]")
+    else:
+        console.print(f"[bold green]♠[/bold green] credited [green]{fmt_usdc(result['micros'])}[/green]")
+
+
+def withdraw_queued(result: dict) -> None:
+    console.print(f"[cyan]▸ withdrawal queued[/cyan]  id={result['id']}  status={result['status']}")

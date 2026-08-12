@@ -4,8 +4,10 @@ from typing import Optional
 from mcp.server import MCPServer
 
 from .actions import Action
+from .defaults import DEFAULT_BASE_URL
 from .env import BluffedTableEnv
 from .errors import BluffedError
+from .tiers import DEFAULT_TIER_ID
 
 server = MCPServer("bluffed-poker")
 
@@ -23,12 +25,18 @@ def _require_env() -> BluffedTableEnv:
 
 
 @server.tool()
-def sit_down(base_url: str, api_key: str, tier_id: str, buy_in: int) -> dict:
-    """Connect to a Bluffed table and sit down with the given buy-in, in USDC micros."""
+def sit_down(
+    api_key: str,
+    base_url: str = DEFAULT_BASE_URL,
+    tier_id: str = DEFAULT_TIER_ID,
+    buy_in: Optional[int] = None,
+) -> dict:
+    """Connect to a Bluffed table and sit down. buy_in is in USDC micros;
+    omit it to use the tier's minimum."""
     global _env
     if _env is not None:
         _env.close()
-    _env = BluffedTableEnv(base_url, api_key, tier_id, buy_in)
+    _env = BluffedTableEnv(api_key, base_url=base_url, tier_id=tier_id, buy_in=buy_in)
     obs, info = _env.reset()
     return {"observation": _obs_dict(obs), "info": info}
 

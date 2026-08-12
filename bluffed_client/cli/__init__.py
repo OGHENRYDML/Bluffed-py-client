@@ -3,10 +3,12 @@ from typing import Optional
 import rich_click as click
 
 from ..account import AccountClient, AccountError
+from ..defaults import DEFAULT_BASE_URL
 from ..env import BluffedTableEnv
 from ..errors import BluffedError
 from ..runner import run_forever
 from ..strategies import STRATEGIES
+from ..tiers import DEFAULT_TIER_ID, get_tier
 from ..wallet import Wallet
 from . import config, ui
 from .format import to_micros
@@ -39,13 +41,20 @@ def _resolve_key(agent_id: Optional[str], agent_key: Optional[str]) -> str:
     raise click.ClickException("no API key — pass --agent-key, or --agent ID for a key saved by `agents create`")
 
 
+def _require_tier(tier_id: str):
+    tier = get_tier(tier_id)
+    if tier is None:
+        raise click.ClickException(f"unknown tier {tier_id!r}")
+    return tier
+
+
 @click.group()
 def main():
     """[bold green]♠ Bluffed[/bold green] — play and manage poker agents from the command line."""
 
 
 @main.command()
-@click.option("--base-url", prompt="Bluffed URL", default="https://bluffed.example.com")
+@click.option("--base-url", prompt="Bluffed URL", default=DEFAULT_BASE_URL)
 @click.option("--email", help="sign in with email/password (default)")
 @click.option("--password", help="required with --email")
 @click.option("--wallet", is_flag=True, help="sign in with a Solana keypair instead — no email needed. Generates one at ~/.bluffed/wallet.key on first use.")
@@ -68,6 +77,42 @@ def login(base_url: str, email: Optional[str], password: Optional[str], wallet: 
 
 
 @main.group()
+def account():
+    """Check your balance, deposit, and withdraw — the owner account, not an agent."""
+
+
+@account.command("balance")
+def account_balance():
+    """Show your available balance and lifetime stats."""
+    acct = _account_from_session()
+    ui.account_balance(acct.balance())
+
+
+@account.command("deposit-address")
+def account_deposit_address():
+    """Get your personal Solana address for depositing USDC."""
+    acct = _account_from_session()
+    ui.deposit_address(acct.deposit_address())
+
+
+@account.command("confirm-deposit")
+@click.argument("tx_sig")
+def account_confirm_deposit(tx_sig: str):
+    """Credit a deposit immediately instead of waiting for it to be picked up automatically."""
+    acct = _account_from_session()
+    ui.deposit_confirmed(acct.confirm_deposit(tx_sig))
+
+
+@account.command("withdraw")
+@click.argument("address")
+@click.argument("amount", type=float)
+def account_withdraw(address: str, amount: float):
+    """Withdraw USDC to a Solana address."""
+    acct = _account_from_session()
+    ui.withdraw_queued(acct.withdraw(address, to_micros(amount)))
+
+
+@main.group()
 def agents():
     """Create, fund, sweep, and list your agents."""
 
@@ -75,8 +120,8 @@ def agents():
 @agents.command("list")
 def agents_list():
     """List your agents with their mode and balance."""
-    account = _account_from_session()
-    ui.agents_table(account.list_agents())
+    acct = _account_from_session()
+    ui.agents_table(acct.list_agents())
 
 
 @agents.command("create")
@@ -85,8 +130,8 @@ def agents_list():
 @click.option("--save-key/--no-save-key", default=True, help="save the API key to ~/.bluffed so play/run can use --agent instead of --agent-key")
 def agents_create(name: str, mode: str, save_key: bool):
     """Create a new agent."""
-    account = _account_from_session()
-    result = account.create_agent(name, mode)
+    acct = _account_from_session()
+    result = acct.create_agent(name, mode)
     ui.agent_created(result["agentId"], mode)
     path = config.save_agent_key(result["agentId"], result["apiKey"]) if save_key else None
     ui.key_reveal(result["apiKey"], path)
@@ -97,9 +142,9 @@ def agents_create(name: str, mode: str, save_key: bool):
 @click.argument("amount", type=float)
 def agents_fund(agent_id: str, amount: float):
     """Move USDC from your balance into an agent."""
-    account = _account_from_session()
+    acct = _account_from_session()
     micros = to_micros(amount)
-    account.fund(agent_id, micros)
+    acct.fund(agent_id, micros)
     ui.fund_result(agent_id, micros)
 
 
@@ -108,9 +153,9 @@ def agents_fund(agent_id: str, amount: float):
 @click.argument("amount", type=float, required=False)
 def agents_sweep(agent_id: str, amount: Optional[float]):
     """Move USDC from an agent back to your balance. Sweeps everything if amount is omitted."""
-    account = _account_from_session()
+    acct = _account_from_session()
     micros = to_micros(amount) if amount is not None else None
-    account.sweep(agent_id, micros)
+    acct.sweep(agent_id, micros)
     ui.sweep_result(agent_id, micros)
 
 
@@ -118,24 +163,26 @@ def agents_sweep(agent_id: str, amount: Optional[float]):
 @click.argument("agent_id")
 def agents_rotate_key(agent_id: str):
     """Revoke an agent's current key and issue a new one."""
-    account = _account_from_session()
-    result = account.rotate_key(agent_id)
+    acct = _account_from_session()
+    result = acct.rotate_key(agent_id)
     config.save_agent_key(agent_id, result["apiKey"])
     ui.key_reveal(result["apiKey"], saved_path=None)
 
 
 @main.command()
-@click.option("--base-url", required=True)
+@click.option("--base-url", default=DEFAULT_BASE_URL, show_default=True)
 @click.option("--agent", "agent_id", help="agent id, to use a key saved by `agents create`")
 @click.option("--agent-key", help="raw API key, if not using a saved one")
-@click.option("--tier", default="t_low", show_default=True)
-@click.option("--buy-in", type=float, required=True, help="buy-in, in USDC")
+@click.option("--tier", default=DEFAULT_TIER_ID, show_default=True)
+@click.option("--buy-in", type=float, default=None, help="buy-in, in USDC — defaults to the tier's minimum")
 @click.option("--hands", type=int, default=1, show_default=True)
 @click.option("--strategy", type=click.Choice(list(STRATEGIES)), default="call", show_default=True)
-def play(base_url: str, agent_id: Optional[str], agent_key: Optional[str], tier: str, buy_in: float, hands: int, strategy: str):
+def play(base_url: str, agent_id: Optional[str], agent_key: Optional[str], tier: str, buy_in: Optional[float], hands: int, strategy: str):
     """Play a handful of hands with a built-in strategy — a quick smoke test."""
     key = _resolve_key(agent_id, agent_key)
-    env = BluffedTableEnv(base_url=base_url, api_key=key, tier_id=tier, buy_in=to_micros(buy_in))
+    _require_tier(tier)
+    buy_in_micros = to_micros(buy_in) if buy_in is not None else None
+    env = BluffedTableEnv(key, base_url=base_url, tier_id=tier, buy_in=buy_in_micros)
     strat = STRATEGIES[strategy]
     try:
         for i in range(hands):
@@ -155,43 +202,51 @@ def play(base_url: str, agent_id: Optional[str], agent_key: Optional[str], tier:
 
 
 @main.command()
-@click.option("--base-url", required=True)
+@click.option("--base-url", default=DEFAULT_BASE_URL, show_default=True)
 @click.option("--agent", "agent_id", required=True, help="agent id — also used to load a saved key")
 @click.option("--agent-key", help="raw API key, if not using a saved one")
-@click.option("--tier", default="t_low", show_default=True)
-@click.option("--buy-in", type=float, required=True, help="buy-in, in USDC")
-@click.option("--min-reserve", type=float, required=True, help="top up once the agent's balance drops below this, in USDC")
-@click.option("--top-up-to", type=float, required=True, help="...back up to this much, in USDC")
-@click.option("--sweep-above", type=float, default=None, help="sweep profit back to your balance above this, in USDC")
-@click.option("--sweep-down-to", type=float, default=None, help="...down to this much, defaults to --sweep-above")
+@click.option("--tier", default=DEFAULT_TIER_ID, show_default=True)
+@click.option("--buy-in", type=float, default=None, help="buy-in, in USDC — defaults to the tier's minimum")
+@click.option("--min-reserve", type=float, default=None, help="top up once the agent's balance drops below this, in USDC — defaults to the tier's minimum buy-in")
+@click.option("--top-up-to", type=float, default=None, help="...back up to this much, in USDC — defaults to 2x the tier's minimum buy-in")
+@click.option("--sweep-above", type=float, default=None, help="sweep profit back to your balance above this, in USDC — defaults to 2x the tier's maximum buy-in")
+@click.option("--sweep-down-to", type=float, default=None, help="...down to this much, defaults to --top-up-to")
 @click.option("--strategy", type=click.Choice(list(STRATEGIES)), default="call", show_default=True)
 def run(
     base_url: str,
     agent_id: str,
     agent_key: Optional[str],
     tier: str,
-    buy_in: float,
-    min_reserve: float,
-    top_up_to: float,
+    buy_in: Optional[float],
+    min_reserve: Optional[float],
+    top_up_to: Optional[float],
     sweep_above: Optional[float],
     sweep_down_to: Optional[float],
     strategy: str,
 ):
     """Play forever, topping up and sweeping the agent's balance automatically. Ctrl-C to stop."""
     key = _resolve_key(agent_id, agent_key)
-    account = _account_from_session()
-    env = BluffedTableEnv(base_url=base_url, api_key=key, tier_id=tier, buy_in=to_micros(buy_in))
+    tier_info = _require_tier(tier)
+    acct = _account_from_session()
+
+    buy_in_micros = to_micros(buy_in) if buy_in is not None else tier_info.min_buy_in
+    min_reserve_micros = to_micros(min_reserve) if min_reserve is not None else tier_info.min_buy_in
+    top_up_to_micros = to_micros(top_up_to) if top_up_to is not None else tier_info.min_buy_in * 2
+    sweep_above_micros = to_micros(sweep_above) if sweep_above is not None else tier_info.max_buy_in * 2
+    sweep_down_to_micros = to_micros(sweep_down_to) if sweep_down_to is not None else top_up_to_micros
+
+    env = BluffedTableEnv(key, base_url=base_url, tier_id=tier, buy_in=buy_in_micros)
 
     try:
         run_forever(
             env,
-            account,
+            acct,
             agent_id,
             STRATEGIES[strategy],
-            min_reserve=to_micros(min_reserve),
-            top_up_to=to_micros(top_up_to),
-            sweep_above=to_micros(sweep_above) if sweep_above is not None else None,
-            sweep_down_to=to_micros(sweep_down_to) if sweep_down_to is not None else None,
+            min_reserve=min_reserve_micros,
+            top_up_to=top_up_to_micros,
+            sweep_above=sweep_above_micros,
+            sweep_down_to=sweep_down_to_micros,
             on_event=ui.event,
         )
     except KeyboardInterrupt:

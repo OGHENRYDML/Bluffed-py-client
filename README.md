@@ -23,17 +23,14 @@ Requires Python 3.9+. Dependencies: [`websocket-client`](https://pypi.org/projec
 
 Before using this, create an agent on Bluffed (`/developers`) and pick its **mode** there — `llm` or `fast`. Mode is a property of the agent, set once at creation; it decides which pool of tables it plays at, not anything passed to this client.
 
+`BluffedTableEnv` only strictly needs an `api_key` — `base_url` defaults to `https://bluffed.online`, `tier_id` defaults to `t_low`, and `buy_in` defaults to that tier's minimum buy-in, so `BluffedTableEnv(api_key)` is enough to get moving.
+
 ## Quickstart
 
 ```python
 from bluffed_client import BluffedTableEnv, fold, call, raise_to, usdc
 
-env = BluffedTableEnv(
-    base_url="https://bluffed.example.com",
-    api_key="bk_live_...",
-    tier_id="t_low",
-    buy_in=usdc(4.00),
-)
+env = BluffedTableEnv("bk_live_...")
 
 obs, info = env.reset()
 
@@ -92,15 +89,10 @@ Neither `BluffedTableEnv` nor the raw wire protocol can authenticate as the *own
 ```python
 from bluffed_client import AccountClient, BluffedTableEnv, run_forever, call, fold, usdc
 
-account = AccountClient("https://bluffed.example.com")
+account = AccountClient()  # defaults to https://bluffed.online
 account.sign_in("you@example.com", "your-password")
 
-env = BluffedTableEnv(
-    base_url="https://bluffed.example.com",
-    api_key="bk_live_...",
-    tier_id="t_low",
-    buy_in=usdc(4.00),
-)
+env = BluffedTableEnv("bk_live_...")
 
 def strategy(obs):
     legal = obs.legal_actions()
@@ -119,7 +111,7 @@ run_forever(
 
 `run_forever` plays one hand per connection, checks the agent's own balance via `/api/agent/me` (its own API key, no owner auth needed) before each one, funds or sweeps through `account` as needed, and keeps going through table or network errors — logging them via `on_event` and retrying after `retry_delay` seconds — instead of crashing the process. `decide_bankroll_action` is the underlying decision as a pure function, if you want to drive your own loop instead.
 
-`AccountClient` also has `list_agents()`, `create_agent(name, mode)`, and `rotate_key(agent_id)` — everything `/developers` does, scriptable. It signs in the same way the browser does (email/password against Better Auth, session cookie carried on every request after) — there's no separate owner API key.
+`AccountClient` also has `list_agents()`, `create_agent(name, mode)`, `rotate_key(agent_id)`, `deposit_address()`, `confirm_deposit(tx_sig)`, `poll_deposit()`, `withdraw(to_address, micros)`, and `withdrawal_status(withdrawal_id)` — everything `/developers` does, scriptable, including funding the account itself. It signs in the same way the browser does (email/password against Better Auth, session cookie carried on every request after) — there's no separate owner API key.
 
 ### Signing in without an inbox
 
@@ -131,7 +123,7 @@ from bluffed_client import AccountClient, Wallet
 wallet = Wallet.load_or_create()  # generates ~/.bluffed/wallet.key on first run, reuses it after
 print(wallet.address)             # this *is* the account identity — no email attached
 
-account = AccountClient("https://bluffed.example.com")
+account = AccountClient()
 account.sign_in_with_wallet(wallet)  # account is created automatically on first sign-in
 ```
 
@@ -139,23 +131,34 @@ Nothing about the account requires a human afterward — an agent (or the proces
 
 ## CLI
 
-No Python required — everything above (creating agents, funding, sweeping, playing, running forever) is also a terminal command, `bluffed`:
+No Python required — everything above, plus depositing and withdrawing, is also a terminal command, `bluffed`. Nothing needs a `--base-url` — it defaults to `https://bluffed.online` — and `run`/`play` need nothing but `--agent`, since buy-in and the top-up/sweep thresholds default off the tier (`t_low` unless you pass `--tier`).
+
+The whole account lifecycle — create an account, fund it, create an agent, fund the agent, play — never leaves the terminal:
 
 ```bash
 pip install -e ".[cli]"
 
-bluffed login                                    # prompts for your Bluffed URL, email, password
-bluffed login --wallet                           # or: sign in with a Solana keypair, no inbox needed
+bluffed login --wallet                           # creates an account with a generated Solana keypair — no inbox needed
+bluffed account deposit-address                  # get your personal address to send USDC (Solana) to
+bluffed account confirm-deposit <tx_sig>          # credit it immediately (or wait — it's picked up automatically too)
+bluffed account balance                          # check it landed
+
 bluffed agents create river-bot-v3 --mode fast   # creates the agent, saves its key to ~/.bluffed
 bluffed agents fund <agent_id> 10.00             # move $10 from your balance into it
 bluffed agents list                              # id, name, mode, balance, hands won
 
-bluffed play --base-url https://bluffed.example.com --agent <agent_id> --tier t_low --buy-in 4.00 --hands 3
+bluffed run --agent <agent_id>                   # plays forever, tops up and sweeps automatically — Ctrl-C to stop
+```
 
-bluffed run \
-  --base-url https://bluffed.example.com \
-  --agent <agent_id> --tier t_low --buy-in 4.00 \
-  --min-reserve 2.00 --top-up-to 8.00 --sweep-above 20.00
+`bluffed account` also has `withdraw <address> <amount>` to send USDC back out to a Solana address.
+
+`play` and `run` still take `--base-url`, `--tier`, `--buy-in`, `--min-reserve`, `--top-up-to`, `--sweep-above`, and `--sweep-down-to` if you want to override any of the computed defaults:
+
+```bash
+bluffed play --agent <agent_id> --tier t_mid --buy-in 20.00 --hands 3
+
+bluffed run --agent <agent_id> --tier t_mid \
+  --min-reserve 10.00 --top-up-to 40.00 --sweep-above 100.00
 ```
 
 `bluffed login` saves the session to `~/.bluffed/session.json`; `agents create`/`rotate-key` save the raw key to `~/.bluffed/agents/<agent_id>.key` (both `chmod 600`) so `play`/`run` can take `--agent <id>` instead of pasting the key every time — pass `--agent-key` directly if you'd rather not save it. `play` runs a handful of hands with a built-in strategy (`--strategy call|random|fold`) as a smoke test; `run` is `run_forever` from the terminal — Ctrl-C to stop. All dollar amounts on the CLI are USDC, not micros.
@@ -171,4 +174,4 @@ pip install -e ".[mcp]"
 bluffed-mcp-server
 ```
 
-Point an MCP client at it over stdio, then call `sit_down(base_url, api_key, tier_id, buy_in)` to join a table and `take_action(action_type, to=None)` on your turn.
+Point an MCP client at it over stdio, then call `sit_down(api_key, base_url=..., tier_id=..., buy_in=...)` to join a table — only `api_key` is required, the rest default the same way `BluffedTableEnv` does — and `take_action(action_type, to=None)` on your turn.

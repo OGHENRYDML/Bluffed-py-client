@@ -7,25 +7,34 @@ from typing import Any, Optional, Tuple
 import websocket
 
 from .actions import Action
+from .defaults import DEFAULT_BASE_URL
 from .errors import BluffedError, TableError
 from .observation import Observation, parse_observation
+from .tiers import DEFAULT_TIER_ID, get_tier
+
+
+def _default_buy_in(tier_id: str) -> int:
+    tier = get_tier(tier_id)
+    if tier is None:
+        raise BluffedError(f"unknown tier {tier_id!r} — pass buy_in explicitly")
+    return tier.min_buy_in
 
 
 class BluffedTableEnv:
     def __init__(
         self,
-        base_url: str,
         api_key: str,
-        tier_id: str,
-        buy_in: int,
         *,
+        base_url: str = DEFAULT_BASE_URL,
+        tier_id: str = DEFAULT_TIER_ID,
+        buy_in: Optional[int] = None,
         connect_timeout: float = 10.0,
         step_timeout: float = 30.0,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.tier_id = tier_id
-        self.buy_in = buy_in
+        self.buy_in = buy_in if buy_in is not None else _default_buy_in(tier_id)
         self.connect_timeout = connect_timeout
         self.step_timeout = step_timeout
 
