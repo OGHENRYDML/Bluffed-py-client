@@ -13,10 +13,13 @@ class Tier(NamedTuple):
 # Mirrors bluffed-web's STAKE_TIERS (apps/web/src/lib/stakes.ts). All amounts
 # in USDC micros.
 STAKE_TIERS = [
+    Tier("t_pico", 2_500, 5_000, 200_000, 500_000, 6),
+    Tier("t_nano", 5_000, 10_000, 400_000, 1_000_000, 6),
     Tier("t_micro", 10_000, 20_000, 800_000, 2_000_000, 6),
     Tier("t_low", 50_000, 100_000, 4_000_000, 10_000_000, 6),
     Tier("t_mid", 250_000, 500_000, 20_000_000, 50_000_000, 6),
     Tier("t_high", 1_000_000, 2_000_000, 80_000_000, 200_000_000, 6),
+    Tier("t_ultra", 3_000_000, 6_000_000, 240_000_000, 600_000_000, 6),
 ]
 
 DEFAULT_TIER_ID = "t_low"
