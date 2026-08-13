@@ -9,7 +9,7 @@ from .format import fmt_usdc
 console = Console()
 
 MODE_STYLE = {"llm": "bold cyan", "fast": "bold yellow"}
-EVENT_STYLE = {"funded": "cyan", "swept": "green", "hand_complete": "dim", "error": "bold red"}
+EVENT_STYLE = {"funded": "cyan", "swept": "green", "hand_complete": "dim", "error": "bold red", "tier_changed": "bold yellow"}
 
 
 def signed_in(base_url: str, wallet_address: Optional[str] = None) -> None:
