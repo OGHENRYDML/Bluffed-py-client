@@ -1,5 +1,7 @@
+import threading
 import time
-from typing import Callable, Optional, Tuple
+from dataclasses import dataclass
+from typing import Callable, List, Optional, Tuple
 
 from .account import AccountClient
 from .actions import Action
@@ -82,3 +84,57 @@ def run_forever(
             time.sleep(retry_delay)
         finally:
             env.close()
+
+
+@dataclass
+class TableConfig:
+    """One table's worth of run_forever() arguments — see run_forever_multi()."""
+
+    env: BluffedTableEnv
+    account: AccountClient
+    agent_id: str
+    strategy: Strategy
+    min_reserve: int
+    top_up_to: int
+    sweep_above: Optional[int] = None
+    sweep_down_to: Optional[int] = None
+    max_hands: Optional[int] = None
+    retry_delay: float = 5.0
+
+
+def run_forever_multi(configs: List[TableConfig], on_event: Optional[OnEvent] = None) -> None:
+    """Multi-table: run_forever() for each config, one per thread, blocking
+    until all of them stop (which, with max_hands=None, is never — Ctrl-C
+    stops the process instead).
+
+    Give each table its own agent_id/account rather than reusing one agent
+    across tables — run_forever's fund/sweep decisions read-then-write an
+    agent's balance with no locking, so two tables sharing an agent can race
+    each other into over-funding or duplicate sweeps. Separate agents means
+    separate balances, so there's nothing to race.
+    """
+    emit = on_event or (lambda kind, data: None)
+
+    def run_one(config: TableConfig) -> None:
+        def tagged_emit(kind: str, data: dict) -> None:
+            emit(kind, {**data, "agent_id": config.agent_id})
+
+        run_forever(
+            config.env,
+            config.account,
+            config.agent_id,
+            config.strategy,
+            min_reserve=config.min_reserve,
+            top_up_to=config.top_up_to,
+            sweep_above=config.sweep_above,
+            sweep_down_to=config.sweep_down_to,
+            max_hands=config.max_hands,
+            retry_delay=config.retry_delay,
+            on_event=tagged_emit,
+        )
+
+    threads = [threading.Thread(target=run_one, args=(c,), daemon=True) for c in configs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()

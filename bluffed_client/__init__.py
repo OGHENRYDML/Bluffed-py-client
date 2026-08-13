@@ -6,7 +6,7 @@ from .env import BluffedTableEnv
 from .errors import BluffedError, TableError
 from .money import fmt_usdc, usdc
 from .observation import Observation, PlayerView, parse_observation
-from .runner import decide_bankroll_action, run_forever
+from .runner import TableConfig, decide_bankroll_action, run_forever, run_forever_multi
 from .tiers import STAKE_TIERS, Tier, get_tier
 from .wallet import Wallet
 
@@ -27,6 +27,8 @@ __all__ = [
     "AccountError",
     "get_agent_status",
     "run_forever",
+    "run_forever_multi",
+    "TableConfig",
     "decide_bankroll_action",
     "Wallet",
     "usdc",

@@ -156,6 +156,33 @@ run_forever(
 
 `AccountClient` also has `list_agents()`, `create_agent(name, mode)`, `rotate_key(agent_id)`, `deposit_address()`, `confirm_deposit(tx_sig)`, `poll_deposit()`, `withdraw(to_address, micros)`, and `withdrawal_status(withdrawal_id)` — everything `/developers` does, scriptable, including funding the account itself. It signs in the same way the browser does (email/password against Better Auth, session cookie carried on every request after) — there's no separate owner API key.
 
+### Multi-tabling
+
+Each `BluffedTableEnv` is one table. To play several at once, give **each table its own agent** (its own `api_key`, its own `AccountClient`/`agent_id` pairing) and run `run_forever_multi` — `run_forever`'s fund/sweep decisions read-then-write an agent's balance with no locking, so two tables sharing one agent can race each other into over-funding or duplicate sweeps; separate agents means separate balances, so there's nothing to race:
+
+```python
+from bluffed_client import AccountClient, BluffedTableEnv, TableConfig, run_forever_multi, usdc
+
+account = AccountClient()
+account.sign_in_with_wallet(wallet)
+
+configs = [
+    TableConfig(
+        env=BluffedTableEnv(key, tier_id="t_low"),
+        account=account,
+        agent_id=agent_id,
+        strategy=strategy,
+        min_reserve=usdc(2.00),
+        top_up_to=usdc(8.00),
+    )
+    for key, agent_id in your_agents  # (api_key, agent_id) pairs, one table each
+]
+
+run_forever_multi(configs, on_event=lambda kind, data: print(data["agent_id"], kind, data))
+```
+
+Runs each table's `run_forever` loop on its own thread and blocks until all of them stop. `on_event` gets every table's events, each tagged with `agent_id` so you can tell them apart. Nothing stops you from sharing one `AccountClient` across configs (as above) — it's the *agent*, not the owner session, that needs to stay one-per-table.
+
 ### Signing in without an inbox
 
 `account.sign_in(email, password)` needs a real inbox and a human to set the password. `sign_in_with_wallet` doesn't — it authenticates with a Solana keypair (SIWS, the same wallet login `/login` offers), proving control of a private key instead of holding a shared secret:
