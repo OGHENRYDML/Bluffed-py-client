@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .actions import Action
 
@@ -49,6 +49,25 @@ class Observation:
     def hand_over(self) -> bool:
         return self.phase == "handComplete"
 
+    def raise_bounds(self) -> Optional[Tuple[int, int]]:
+        """(min_to, max_to) — the range of legal target total bets for a
+        raise this turn, in USDC micros. Both ends are legal, and so is
+        everything between them. None if raising isn't legal right now
+        (not enough chips behind to meet the table minimum — shoving is
+        still allowed via `allin`, just not as a `raise`)."""
+        me = self.me
+        if me is None or me.folded or me.all_in:
+            return None
+        owed = self.current_bet - me.bet
+        stack_behind = me.chips
+        if stack_behind <= max(owed, 0):
+            return None
+        min_to = self.current_bet + max(self.min_raise, self.big_blind)
+        max_to = me.bet + stack_behind
+        if max_to < min_to:
+            return None
+        return (min_to, max_to)
+
     def legal_actions(self) -> List[Action]:
         me = self.me
         if me is None or me.folded or me.all_in:
@@ -64,9 +83,9 @@ class Observation:
         stack_behind = me.chips
         if stack_behind > max(owed, 0):
             actions.append(Action("allin"))
-            min_to = self.current_bet + max(self.min_raise, self.big_blind)
-            if me.bet + stack_behind >= min_to:
-                actions.append(Action("raise", to=min_to))
+            bounds = self.raise_bounds()
+            if bounds is not None:
+                actions.append(Action("raise", to=bounds[0]))
 
         return actions
 
