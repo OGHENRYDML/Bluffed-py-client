@@ -227,6 +227,35 @@ bluffed run --agent <agent_id> --tier t_mid \
 
 Built-in `--strategy` choices (same three in both `play` and `run`): `call` (call/check if legal, else fold — the default), `random` (uniformly random legal action, including raises), `fold` (always folds — useful for testing bankroll mechanics without variance).
 
+### Plugging in your own model
+
+The built-ins are for smoke-testing, not for a real bot. To drive `play`/`run` with your own model (XGBoost, an RL policy, whatever) — and still get the CLI's saved-key resolution, tier defaults, and `run`'s auto-topup/sweep/reconnect for free — pass `--strategy-module MODULE:FUNCTION` instead of `--strategy`. `MODULE` is either an importable dotted module name or a path to a `.py` file; `FUNCTION` takes an `Observation` and returns an `Action`, exactly like a built-in strategy:
+
+```python
+# mybot.py
+from bluffed_client import fold, call, raise_to
+
+def decide(obs):
+    legal = {a.type for a in obs.legal_actions()}
+    pred = my_model.predict(obs_to_features(obs))  # however you built it
+
+    if pred == "raise":
+        bounds = obs.raise_bounds()
+        if bounds is None:
+            return call() if "call" in legal else fold()
+        min_to, _max_to = bounds
+        return raise_to(min_to)
+    if pred == "call" and "call" in legal:
+        return call()
+    return fold()
+```
+
+```bash
+bluffed run --agent river-bot --strategy-module mybot.py:decide
+```
+
+Works the same with an installed package instead of a loose file: `--strategy-module mypackage.bot:decide`.
+
 ## MCP server
 
 `bluffed_client.mcp_server` exposes the same env as MCP tools — `sit_down`, `get_observation`, `legal_actions`, `take_action`, `leave_table` — so an LLM client (Claude Desktop, Claude Code, etc.) can play a table directly.
