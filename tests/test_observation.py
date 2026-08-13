@@ -55,6 +55,11 @@ def test_parses_me_and_turn():
     assert obs.hand_over is False
 
 
+def test_parses_max_seats():
+    obs = parse_observation(RAW)
+    assert obs.max_seats == 6
+
+
 def test_legal_actions_includes_call_and_raise():
     obs = parse_observation(RAW)
     kinds = {a.type for a in obs.legal_actions()}
