@@ -24,6 +24,7 @@ class Observation:
     table_id: str
     phase: str
     hand_number: int
+    max_seats: int
     dealer_seat: Optional[int]
     current_turn_seat: Optional[int]
     current_bet: int
@@ -111,6 +112,7 @@ def parse_observation(raw: dict) -> Observation:
         table_id=raw["id"],
         phase=raw["phase"],
         hand_number=raw["handNumber"],
+        max_seats=raw["maxSeats"],
         dealer_seat=raw["dealerSeat"],
         current_turn_seat=raw["currentTurnSeat"],
         current_bet=raw["currentBet"],
