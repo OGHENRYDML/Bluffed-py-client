@@ -13,7 +13,6 @@ from ..env import BluffedTableEnv
 from ..errors import BluffedError
 from ..observation import Observation
 from ..runner import run_forever
-from ..strategies import STRATEGIES
 from ..tiers import DEFAULT_TIER_ID, get_tier
 from ..wallet import Wallet
 from . import config, ui
@@ -87,12 +86,6 @@ def _load_strategy_module(spec: str) -> Callable[[Observation], Action]:
     if not callable(strategy):
         raise click.ClickException(f"{spec} is not callable")
     return strategy
-
-
-def _resolve_strategy(strategy: str, strategy_module: Optional[str]) -> Callable[[Observation], Action]:
-    if strategy_module:
-        return _load_strategy_module(strategy_module)
-    return STRATEGIES[strategy]
 
 
 @click.group()
@@ -223,8 +216,7 @@ def agents_rotate_key(agent_id: str):
 @click.option("--tier", default=DEFAULT_TIER_ID, show_default=True)
 @click.option("--buy-in", type=float, default=None, help="buy-in, in USDC — defaults to the tier's minimum")
 @click.option("--hands", type=int, default=1, show_default=True)
-@click.option("--strategy", type=click.Choice(list(STRATEGIES)), default="call", show_default=True, help="built-in strategy — ignored if --strategy-module is set")
-@click.option("--strategy-module", default=None, help="MODULE:FUNCTION or path/to/file.py:FUNCTION — your own strategy, receives an Observation and returns an Action")
+@click.option("--strategy-module", required=True, help="MODULE:FUNCTION or path/to/file.py:FUNCTION — your strategy, receives an Observation and returns an Action")
 def play(
     base_url: str,
     agent_id: Optional[str],
@@ -232,15 +224,14 @@ def play(
     tier: str,
     buy_in: Optional[float],
     hands: int,
-    strategy: str,
-    strategy_module: Optional[str],
+    strategy_module: str,
 ):
-    """Play a handful of hands with a built-in strategy — a quick smoke test."""
+    """Play a handful of hands with your strategy — a quick smoke test."""
     key = _resolve_key(agent_id, agent_key)
     _require_tier(tier)
     buy_in_micros = to_micros(buy_in) if buy_in is not None else None
     env = BluffedTableEnv(key, base_url=base_url, tier_id=tier, buy_in=buy_in_micros)
-    strat = _resolve_strategy(strategy, strategy_module)
+    strat = _load_strategy_module(strategy_module)
     try:
         for i in range(hands):
             obs, _info = env.reset()
@@ -268,8 +259,7 @@ def play(
 @click.option("--top-up-to", type=float, default=None, help="...back up to this much, in USDC — defaults to 2x the tier's minimum buy-in")
 @click.option("--sweep-above", type=float, default=None, help="sweep profit back to your balance above this, in USDC — defaults to 2x the tier's maximum buy-in")
 @click.option("--sweep-down-to", type=float, default=None, help="...down to this much, defaults to --top-up-to")
-@click.option("--strategy", type=click.Choice(list(STRATEGIES)), default="call", show_default=True, help="built-in strategy — ignored if --strategy-module is set")
-@click.option("--strategy-module", default=None, help="MODULE:FUNCTION or path/to/file.py:FUNCTION — your own strategy, receives an Observation and returns an Action")
+@click.option("--strategy-module", required=True, help="MODULE:FUNCTION or path/to/file.py:FUNCTION — your strategy, receives an Observation and returns an Action")
 def run(
     base_url: str,
     agent_id: str,
@@ -280,13 +270,12 @@ def run(
     top_up_to: Optional[float],
     sweep_above: Optional[float],
     sweep_down_to: Optional[float],
-    strategy: str,
-    strategy_module: Optional[str],
+    strategy_module: str,
 ):
     """Play forever, topping up and sweeping the agent's balance automatically. Ctrl-C to stop."""
     key = _resolve_key(agent_id, agent_key)
     tier_info = _require_tier(tier)
-    strat = _resolve_strategy(strategy, strategy_module)
+    strat = _load_strategy_module(strategy_module)
     acct = _account_from_session()
 
     buy_in_micros = to_micros(buy_in) if buy_in is not None else tier_info.min_buy_in
