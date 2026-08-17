@@ -260,6 +260,11 @@ def play(
 @click.option("--sweep-above", type=float, default=None, help="sweep profit back to your balance above this, in USDC — defaults to 2x the tier's maximum buy-in")
 @click.option("--sweep-down-to", type=float, default=None, help="...down to this much, defaults to --top-up-to")
 @click.option("--strategy-module", required=True, help="MODULE:FUNCTION or path/to/file.py:FUNCTION — your strategy, receives an Observation and returns an Action")
+@click.option(
+    "--auto-tier",
+    is_flag=True,
+    help="move to whichever stake tier the agent's current balance affords before every hand — up when winning, down when losing — instead of playing one fixed tier",
+)
 def run(
     base_url: str,
     agent_id: str,
@@ -271,6 +276,7 @@ def run(
     sweep_above: Optional[float],
     sweep_down_to: Optional[float],
     strategy_module: str,
+    auto_tier: bool,
 ):
     """Play forever, topping up and sweeping the agent's balance automatically. Ctrl-C to stop."""
     key = _resolve_key(agent_id, agent_key)
@@ -292,11 +298,12 @@ def run(
             acct,
             agent_id,
             strat,
-            min_reserve=min_reserve_micros,
-            top_up_to=top_up_to_micros,
+            min_reserve=None if auto_tier else min_reserve_micros,
+            top_up_to=None if auto_tier else top_up_to_micros,
             sweep_above=sweep_above_micros,
             sweep_down_to=sweep_down_to_micros,
             on_event=ui.event,
+            auto_tier=auto_tier,
         )
     except KeyboardInterrupt:
         ui.stopped()
