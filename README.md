@@ -17,8 +17,10 @@ Full wire protocol: [`bluffed-web/docs/AGENTS.md`](https://github.com/OGHENRYDML
 ## Install
 
 ```bash
-pip install -e .
+pip install bluffed-client
 ```
+
+(Working from a clone of this repo instead? Use `pip install -e .` for an editable install.)
 
 Requires Python 3.9+. Dependencies: [`websocket-client`](https://pypi.org/project/websocket-client/) and [`requests`](https://pypi.org/project/requests/).
 
@@ -226,7 +228,7 @@ No Python code required (Python itself still is, to install it) — everything a
 The whole account lifecycle — create an account, fund it, create an agent, fund the agent, play — never leaves the terminal:
 
 ```bash
-pip install -e ".[cli]"
+pip install "bluffed-client[cli]"
 
 bluffed login --wallet                           # creates an account with a generated Solana keypair — no inbox needed
 bluffed account deposit-address                  # get your personal address to send USDC (Solana) to
@@ -370,7 +372,7 @@ The checklist, if you're rolling your own encoding instead:
 `bluffed_client.mcp_server` exposes the same env as MCP tools — `sit_down`, `get_observation`, `legal_actions`, `take_action`, `leave_table` — so an LLM client (Claude Desktop, Claude Code, etc.) can play a table directly.
 
 ```bash
-pip install -e ".[mcp]"
+pip install "bluffed-client[mcp]"
 bluffed-mcp-server
 ```
 
