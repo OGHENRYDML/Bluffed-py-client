@@ -2,6 +2,7 @@ import json
 import queue
 
 from bluffed_client.env import BluffedTableEnv
+from bluffed_client.observation import parse_observation
 
 
 class FakeWs:
@@ -31,13 +32,13 @@ def _player(seat=0, chips=1000):
     }
 
 
-def _state_msg(phase, current_turn_seat=None, max_seats=6):
+def _state_msg(phase, current_turn_seat=None, max_seats=6, hand_number=1):
     return {
         "type": "state",
         "state": {
             "id": "t1",
             "phase": phase,
-            "handNumber": 1,
+            "handNumber": hand_number,
             "maxSeats": max_seats,
             "dealerSeat": None,
             "currentTurnSeat": current_turn_seat,
@@ -47,7 +48,7 @@ def _state_msg(phase, current_turn_seat=None, max_seats=6):
             "bigBlind": 2,
             "pot": 0,
             "community": [],
-            "players": [_player()],
+            "players": [_player(seat=current_turn_seat or 0)],
             "winners": None,
             "log": [],
         },
@@ -133,3 +134,74 @@ def test_leave_marks_not_seated():
     env.leave()
 
     assert env._seated is False
+
+
+def test_reset_waits_for_the_next_hand_instead_of_reconnecting_when_already_seated():
+    # The old reset() always closed and reopened the socket, which meant
+    # every hand re-ran the seat/anti-collusion check from scratch. Once
+    # seated on a live connection, the next hand just deals on its own —
+    # reset() should wait for it in place, not leave and reconnect.
+    env = BluffedTableEnv("bk_live_fake")
+    fake_ws = FakeWs()
+    env._ws = fake_ws
+    env._seated = True
+    env._last_obs = parse_observation(_state_msg("handComplete", hand_number=1)["state"])
+    env._messages = queue.Queue()
+    env._messages.put(_state_msg("handComplete", hand_number=1))  # stale rebroadcast of the hand that just ended
+    env._messages.put(_state_msg("preflop", current_turn_seat=0, hand_number=2))
+
+    obs, _info = env.reset()
+
+    assert obs.hand_number == 2
+    assert obs.my_turn
+    assert env._ws is fake_ws  # never reconnected
+    assert fake_ws.sent == []  # no fresh "sit" — still the same seat
+
+
+def test_reset_reconnects_when_not_currently_seated(monkeypatch):
+    # First call (nothing seated yet), or any call after leave()/close(),
+    # must go through the real connect+sit path — not the "already seated,
+    # just wait" branch, which would blow up reading
+    # self._last_obs.hand_number on a None _last_obs.
+    import bluffed_client.env as env_module
+
+    def fake_create_connection(url, timeout):
+        raise RuntimeError("sentinel: reached the real connect path")
+
+    monkeypatch.setattr(env_module.websocket, "create_connection", fake_create_connection)
+
+    env = BluffedTableEnv("bk_live_fake")
+    env._ws = None
+    env._seated = False
+
+    try:
+        env.reset()
+        assert False, "expected the sentinel RuntimeError from create_connection"
+    except RuntimeError as exc:
+        assert "sentinel" in str(exc)
+
+
+def test_reset_reconnects_when_marked_seated_but_the_connection_died(monkeypatch):
+    # _seated only ever flips to False via leave()/close() — a socket that
+    # died on its own (recv loop hit an exception and set _closed) leaves
+    # _seated True with nothing left to actually wait on. reset() must
+    # still detect that and reconnect instead of blocking for a full
+    # step_timeout on a queue nothing will ever feed again.
+    import bluffed_client.env as env_module
+
+    def fake_create_connection(url, timeout):
+        raise RuntimeError("sentinel: reached the real connect path")
+
+    monkeypatch.setattr(env_module.websocket, "create_connection", fake_create_connection)
+
+    env = BluffedTableEnv("bk_live_fake")
+    env._ws = FakeWs()
+    env._seated = True
+    env._closed.set()
+
+    try:
+        env.reset()
+        assert False, "expected the sentinel RuntimeError from create_connection"
+    except RuntimeError as exc:
+        assert "sentinel" in str(exc)
+

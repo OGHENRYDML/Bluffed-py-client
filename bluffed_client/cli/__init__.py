@@ -242,7 +242,6 @@ def play(
                 if terminated or truncated:
                     break
             ui.hand_result(i + 1, hands, obs.phase, hand_reward)
-            env.leave()
     except BluffedError as e:
         raise click.ClickException(str(e))
     finally:

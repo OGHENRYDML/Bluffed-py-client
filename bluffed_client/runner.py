@@ -61,9 +61,11 @@ def run_forever(
     """Play hands back to back, forever (or until `max_hands`), keeping the
     agent's own balance within [min_reserve, sweep_above] by pulling from
     and pushing to the owner's balance through `account` — skipped
-    entirely if `min_reserve`/`top_up_to` are left `None`. Reconnects for
-    every hand; a table or network error pauses `retry_delay` seconds and
-    tries again rather than raising.
+    entirely if `min_reserve`/`top_up_to` are left `None`. Stays connected
+    and seated across hands (env.reset() waits for the next hand in place
+    rather than reconnecting); a table or network error closes the
+    connection, pauses `retry_delay` seconds, and reconnects on the next
+    attempt rather than raising.
 
     `auto_tier=True` moves the agent to whatever stake tier its *current*
     balance actually affords before every hand — up when it's winning,
@@ -77,53 +79,57 @@ def run_forever(
     current_env = env
     current_env.on_event = emit
 
-    while max_hands is None or hands < max_hands:
-        try:
-            status = get_agent_status(current_env.base_url, current_env.api_key)
-            available = status["availableMicros"]
+    try:
+        while max_hands is None or hands < max_hands:
+            try:
+                status = get_agent_status(current_env.base_url, current_env.api_key)
+                available = status["availableMicros"]
 
-            if min_reserve is not None and top_up_to is not None:
-                kind, amount = decide_bankroll_action(
-                    available,
-                    min_reserve=min_reserve,
-                    top_up_to=top_up_to,
-                    sweep_above=sweep_above,
-                    sweep_down_to=sweep_down_to,
-                )
-                if kind == "fund":
-                    account.fund(agent_id, amount)
-                    emit("funded", {"micros": amount})
-                    available += amount
-                elif kind == "sweep":
-                    account.sweep(agent_id, amount)
-                    emit("swept", {"micros": amount})
-                    available -= amount
-
-            if auto_tier:
-                target = _pick_tier_for_balance(available)
-                if target.id != current_env.tier_id:
-                    from_tier = current_env.tier_id
-                    current_env.close()
-                    current_env = BluffedTableEnv(
-                        current_env.api_key, base_url=current_env.base_url, tier_id=target.id, on_event=emit
+                if min_reserve is not None and top_up_to is not None:
+                    kind, amount = decide_bankroll_action(
+                        available,
+                        min_reserve=min_reserve,
+                        top_up_to=top_up_to,
+                        sweep_above=sweep_above,
+                        sweep_down_to=sweep_down_to,
                     )
-                    emit("tier_changed", {"from": from_tier, "to": target.id})
+                    if kind == "fund":
+                        account.fund(agent_id, amount)
+                        emit("funded", {"micros": amount})
+                        available += amount
+                    elif kind == "sweep":
+                        account.sweep(agent_id, amount)
+                        emit("swept", {"micros": amount})
+                        available -= amount
 
-            obs, _info = current_env.reset()
-            hand_reward = 0.0
-            while not obs.hand_over:
-                obs, reward, terminated, truncated, _info = current_env.step(strategy(obs))
-                hand_reward += reward
-                if terminated or truncated:
-                    break
-            current_env.leave()
-            hands += 1
-            emit("hand_complete", {"hands": hands, "chips_delta": hand_reward, "won": hand_reward > 0})
-        except Exception as exc:  # noqa: BLE001 - keep the loop alive on any failure
-            emit("error", {"error": str(exc)})
-            time.sleep(retry_delay)
-        finally:
-            current_env.close()
+                if auto_tier:
+                    target = _pick_tier_for_balance(available)
+                    if target.id != current_env.tier_id:
+                        from_tier = current_env.tier_id
+                        current_env.close()
+                        current_env = BluffedTableEnv(
+                            current_env.api_key, base_url=current_env.base_url, tier_id=target.id, on_event=emit
+                        )
+                        emit("tier_changed", {"from": from_tier, "to": target.id})
+
+                obs, _info = current_env.reset()
+                hand_reward = 0.0
+                while not obs.hand_over:
+                    obs, reward, terminated, truncated, _info = current_env.step(strategy(obs))
+                    hand_reward += reward
+                    if terminated or truncated:
+                        break
+                hands += 1
+                emit("hand_complete", {"hands": hands, "chips_delta": hand_reward, "won": hand_reward > 0})
+            except Exception as exc:  # noqa: BLE001 - keep the loop alive on any failure
+                emit("error", {"error": str(exc)})
+                # Force a real reconnect on the next reset() rather than
+                # trying to keep waiting on a connection that just failed.
+                current_env.close()
+                time.sleep(retry_delay)
+    finally:
+        current_env.leave()
+        current_env.close()
 
 
 @dataclass
