@@ -77,6 +77,7 @@ class BluffedTableEnv:
 
         self._last_obs: Optional[Observation] = None
         self._prev_chips: Optional[int] = None
+        self._seated = False
 
     @property
     def last_observation(self) -> Optional[Observation]:
@@ -169,6 +170,7 @@ class BluffedTableEnv:
 
         self._send({"type": "sit", "buyIn": self.buy_in})
         obs = self._await_turn_or_terminal(timeout=self.step_timeout)
+        self._seated = True
         self._prev_chips = self._chips_now(obs)
         me = obs.me
         return obs, {"my_id": me.id if me else None}
@@ -182,8 +184,15 @@ class BluffedTableEnv:
 
         try:
             obs = self._await_turn_or_terminal(timeout=self.step_timeout)
-        except BluffedError:
-            return self._last_obs, 0.0, False, True, {"reason": "connection_lost"}
+        except TableError as exc:
+            # A real error the server sent back (not_your_turn,
+            # same_owner_already_seated, ...) — TableError is a BluffedError
+            # subclass, so this used to get swallowed by the branch below
+            # and reported as an opaque "connection_lost" with no way to
+            # tell a table-rules violation from an actual dropped socket.
+            return self._last_obs, 0.0, False, True, {"reason": "table_error", "error": exc.code}
+        except BluffedError as exc:
+            return self._last_obs, 0.0, False, True, {"reason": "connection_lost", "error": str(exc)}
 
         chips_after = self._chips_now(obs)
         reward = float((chips_after or 0) - (chips_before or 0))
@@ -194,8 +203,22 @@ class BluffedTableEnv:
     def leave(self) -> None:
         if self._ws:
             self._send({"type": "leave"})
+        self._seated = False
 
     def close(self) -> None:
+        # The server never drops a merely-disconnected player from their
+        # seat (only an explicit "leave" does) — closing the socket while
+        # still seated without this would leave a permanent zombie seat,
+        # and the *next* reset() on this env would come back
+        # already_seated since the old one was never actually stood up.
+        if self._seated and self._ws:
+            try:
+                self._ws.send(json.dumps({"type": "leave"}))
+                time.sleep(0.2)
+            except Exception:
+                pass
+            self._seated = False
+
         self._closed.set()
         if self._ws:
             try:

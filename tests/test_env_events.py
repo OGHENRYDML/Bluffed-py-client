@@ -1,6 +1,18 @@
+import json
 import queue
 
 from bluffed_client.env import BluffedTableEnv
+
+
+class FakeWs:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, data):
+        self.sent.append(data)
+
+    def close(self):
+        pass
 
 
 def _player(seat=0, chips=1000):
@@ -82,3 +94,42 @@ def test_waiting_for_players_prints_by_default_with_no_configuration(capsys):
 
     out = capsys.readouterr().out
     assert "Waiting for other players" in out
+
+
+def test_close_stands_up_a_still_seated_player():
+    # The server never drops a merely-disconnected player from their seat
+    # (only an explicit "leave" does) — without this, close()ing (or
+    # reset()ing, which calls close() first) while still seated leaves a
+    # zombie seat, and the next sit for this same env comes back
+    # already_seated.
+    env = BluffedTableEnv("bk_live_fake")
+    fake_ws = FakeWs()
+    env._ws = fake_ws
+    env._seated = True
+
+    env.close()
+
+    assert env._seated is False
+    sent = [json.loads(m) for m in fake_ws.sent]
+    assert {"type": "leave"} in sent
+
+
+def test_close_sends_nothing_when_never_seated():
+    env = BluffedTableEnv("bk_live_fake")
+    fake_ws = FakeWs()
+    env._ws = fake_ws
+    env._seated = False
+
+    env.close()
+
+    assert fake_ws.sent == []
+
+
+def test_leave_marks_not_seated():
+    env = BluffedTableEnv("bk_live_fake")
+    env._ws = FakeWs()
+    env._seated = True
+
+    env.leave()
+
+    assert env._seated is False
