@@ -68,3 +68,17 @@ def test_await_turn_or_terminal_with_no_on_event_does_not_raise():
     obs = env._await_turn_or_terminal(timeout=1.0)
 
     assert obs.hand_over
+
+
+def test_waiting_for_players_prints_by_default_with_no_configuration(capsys):
+    # The actual ask: a script that never wires up on_event should still see
+    # something, instead of looking identical to a stuck connection.
+    env = BluffedTableEnv("bk_live_fake")
+    env._messages = queue.Queue()
+    env._messages.put(_state_msg("waiting"))
+    env._messages.put(_state_msg("handComplete"))
+
+    env._await_turn_or_terminal(timeout=1.0)
+
+    out = capsys.readouterr().out
+    assert "Waiting for other players" in out

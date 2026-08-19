@@ -2,7 +2,7 @@ from .account import AccountClient, AccountError
 from .actions import Action, allin, call, check, fold, raise_to
 from .agent_self import get_agent_status
 from .defaults import DEFAULT_BASE_URL
-from .env import BluffedTableEnv
+from .env import BluffedTableEnv, default_log
 from .errors import BluffedError, TableError
 from .money import fmt_usdc, usdc
 from .observation import Observation, PlayerView, parse_observation
@@ -12,6 +12,7 @@ from .wallet import Wallet
 
 __all__ = [
     "BluffedTableEnv",
+    "default_log",
     "Action",
     "fold",
     "check",

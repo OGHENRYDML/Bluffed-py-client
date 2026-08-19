@@ -6,7 +6,7 @@ from typing import Callable, List, Optional, Tuple
 from .account import AccountClient
 from .actions import Action
 from .agent_self import get_agent_status
-from .env import BluffedTableEnv
+from .env import BluffedTableEnv, default_log
 from .observation import Observation
 from .tiers import STAKE_TIERS, Tier
 
@@ -73,7 +73,7 @@ def run_forever(
     a real behavior change someone should choose, not one silently applied.
     """
     hands = 0
-    emit = on_event or (lambda kind, data: None)
+    emit = on_event or default_log
     current_env = env
     current_env.on_event = emit
 
@@ -154,7 +154,7 @@ def run_forever_multi(configs: List[TableConfig], on_event: Optional[OnEvent] = 
     each other into over-funding or duplicate sweeps. Separate agents means
     separate balances, so there's nothing to race.
     """
-    emit = on_event or (lambda kind, data: None)
+    emit = on_event or default_log
 
     def run_one(config: TableConfig) -> None:
         def tagged_emit(kind: str, data: dict) -> None:

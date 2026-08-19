@@ -9,10 +9,38 @@ import websocket
 from .actions import Action
 from .defaults import DEFAULT_BASE_URL
 from .errors import BluffedError, TableError
+from .money import fmt_usdc
 from .observation import Observation, parse_observation
 from .tiers import DEFAULT_TIER_ID, get_tier
 
 OnEvent = Callable[[str, dict], None]
+
+
+def default_log(kind: str, data: dict) -> None:
+    """Plain-text fallback for `on_event` — used whenever a caller (a
+    hand-rolled script, `run_forever`, whichever) doesn't wire up its own
+    handler, so connecting/playing is never silent by default. A caller
+    that wants quiet can still pass `on_event=lambda *a: None` explicitly."""
+    if kind == "connecting":
+        print("Connecting...")
+    elif kind == "connected":
+        print("Connected.")
+    elif kind == "waiting_for_players":
+        print(f"Waiting for other players ({data['seats']}/{data['max_seats']} seated)...")
+    elif kind == "hand_complete":
+        delta = data.get("chips_delta", 0)
+        outcome = "won" if delta > 0 else "lost" if delta < 0 else "pushed"
+        print(f"Hand #{data.get('hands')}: {outcome} {fmt_usdc(abs(delta))}")
+    elif kind == "funded":
+        print(f"Funded agent with {fmt_usdc(data['micros'])}")
+    elif kind == "swept":
+        print(f"Swept {fmt_usdc(data.get('micros') or 0)} back to owner")
+    elif kind == "tier_changed":
+        print(f"Moved from tier {data['from']} to {data['to']}")
+    elif kind == "error":
+        print(f"Error: {data.get('error')}")
+    else:
+        print(f"{kind}: {data}")
 
 
 def _default_buy_in(tier_id: str) -> int:
@@ -98,6 +126,8 @@ class BluffedTableEnv:
     def _emit(self, kind: str, data: dict) -> None:
         if self.on_event is not None:
             self.on_event(kind, data)
+        else:
+            default_log(kind, data)
 
     def _await_turn_or_terminal(self, timeout: float) -> Observation:
         deadline = time.monotonic() + timeout
