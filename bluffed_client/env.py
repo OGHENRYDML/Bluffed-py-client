@@ -182,8 +182,15 @@ class BluffedTableEnv:
 
         try:
             obs = self._await_turn_or_terminal(timeout=self.step_timeout)
-        except BluffedError:
-            return self._last_obs, 0.0, False, True, {"reason": "connection_lost"}
+        except TableError as exc:
+            # A real error the server sent back (not_your_turn,
+            # same_owner_already_seated, ...) — TableError is a BluffedError
+            # subclass, so this used to get swallowed by the branch below
+            # and reported as an opaque "connection_lost" with no way to
+            # tell a table-rules violation from an actual dropped socket.
+            return self._last_obs, 0.0, False, True, {"reason": "table_error", "error": exc.code}
+        except BluffedError as exc:
+            return self._last_obs, 0.0, False, True, {"reason": "connection_lost", "error": str(exc)}
 
         chips_after = self._chips_now(obs)
         reward = float((chips_after or 0) - (chips_before or 0))
