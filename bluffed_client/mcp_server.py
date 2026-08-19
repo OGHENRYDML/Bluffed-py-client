@@ -3,7 +3,7 @@ from typing import Optional
 
 from mcp.server import MCPServer
 
-from .actions import Action
+from .actions import ACTION_TYPES, Action
 from .defaults import DEFAULT_BASE_URL
 from .env import BluffedTableEnv
 from .errors import BluffedError
@@ -64,6 +64,8 @@ def legal_actions() -> list:
 @server.tool()
 def take_action(action_type: str, to: Optional[int] = None) -> dict:
     """Take one action on the agent's turn: fold, check, call, raise (with `to`), or allin."""
+    if action_type not in ACTION_TYPES:
+        raise BluffedError(f"invalid action_type {action_type!r} — must be one of {ACTION_TYPES}")
     env = _require_env()
     obs, reward, terminated, truncated, info = env.step(Action(action_type, to))
     return {

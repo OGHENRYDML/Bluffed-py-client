@@ -130,7 +130,12 @@ class BluffedTableEnv:
         else:
             default_log(kind, data)
 
-    def _await_turn_or_terminal(self, timeout: float) -> Observation:
+    def _await_turn_or_terminal(self, timeout: float, after_hand_number: Optional[int] = None) -> Observation:
+        # `after_hand_number` is set when we're already seated and waiting
+        # for the *next* hand on the same connection (see reset()) — without
+        # it, a late/duplicate broadcast of the hand that just ended would
+        # satisfy `obs.hand_over` immediately and we'd report a hand as
+        # played without ever having seen a card of it.
         deadline = time.monotonic() + timeout
         announced_waiting = False
         while True:
@@ -146,6 +151,8 @@ class BluffedTableEnv:
             if obs.phase == "waiting" and not announced_waiting:
                 announced_waiting = True
                 self._emit("waiting_for_players", {"seats": len(obs.players), "max_seats": obs.max_seats})
+            if after_hand_number is not None and obs.hand_number == after_hand_number:
+                continue
             if obs.hand_over or obs.my_turn:
                 return obs
 
@@ -157,6 +164,22 @@ class BluffedTableEnv:
         return me.chips if me else self._prev_chips
 
     def reset(self) -> Tuple[Observation, dict]:
+        # Already sitting at a live table on a live connection — the next
+        # hand deals on its own; just wait for it instead of leaving and
+        # reconnecting. Reconnecting on every reset() (the old behavior)
+        # meant every hand re-ran the seat/anti-collusion check from
+        # scratch, which is slow on its own and, when several of one
+        # owner's agents reconnect in the same instant, races that check:
+        # it reads the seats currently at the table before any of the
+        # other in-flight reconnects have actually landed, so more than
+        # one of them can slip past a guard that's only ever supposed to
+        # allow one seat per owner per table.
+        if self._ws is not None and self._seated and not self._closed.is_set():
+            obs = self._await_turn_or_terminal(timeout=self.step_timeout, after_hand_number=self._last_obs.hand_number)
+            self._prev_chips = self._chips_now(obs)
+            me = obs.me
+            return obs, {"my_id": me.id if me else None}
+
         self.close()
         self._closed.clear()
         self._messages = queue.Queue()
