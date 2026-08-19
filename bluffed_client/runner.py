@@ -6,7 +6,7 @@ from typing import Callable, List, Optional, Tuple
 from .account import AccountClient
 from .actions import Action
 from .agent_self import get_agent_status
-from .env import BluffedTableEnv
+from .env import BluffedTableEnv, default_log
 from .observation import Observation
 from .tiers import STAKE_TIERS, Tier
 
@@ -73,8 +73,9 @@ def run_forever(
     a real behavior change someone should choose, not one silently applied.
     """
     hands = 0
-    emit = on_event or (lambda kind, data: None)
+    emit = on_event or default_log
     current_env = env
+    current_env.on_event = emit
 
     while max_hands is None or hands < max_hands:
         try:
@@ -104,18 +105,20 @@ def run_forever(
                     from_tier = current_env.tier_id
                     current_env.close()
                     current_env = BluffedTableEnv(
-                        current_env.api_key, base_url=current_env.base_url, tier_id=target.id
+                        current_env.api_key, base_url=current_env.base_url, tier_id=target.id, on_event=emit
                     )
                     emit("tier_changed", {"from": from_tier, "to": target.id})
 
             obs, _info = current_env.reset()
+            hand_reward = 0.0
             while not obs.hand_over:
-                obs, _reward, terminated, truncated, _info = current_env.step(strategy(obs))
+                obs, reward, terminated, truncated, _info = current_env.step(strategy(obs))
+                hand_reward += reward
                 if terminated or truncated:
                     break
             current_env.leave()
             hands += 1
-            emit("hand_complete", {"hands": hands})
+            emit("hand_complete", {"hands": hands, "chips_delta": hand_reward, "won": hand_reward > 0})
         except Exception as exc:  # noqa: BLE001 - keep the loop alive on any failure
             emit("error", {"error": str(exc)})
             time.sleep(retry_delay)
@@ -151,7 +154,7 @@ def run_forever_multi(configs: List[TableConfig], on_event: Optional[OnEvent] = 
     each other into over-funding or duplicate sweeps. Separate agents means
     separate balances, so there's nothing to race.
     """
-    emit = on_event or (lambda kind, data: None)
+    emit = on_event or default_log
 
     def run_one(config: TableConfig) -> None:
         def tagged_emit(kind: str, data: dict) -> None:

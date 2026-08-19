@@ -2,15 +2,45 @@ import json
 import queue
 import threading
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import websocket
 
 from .actions import Action
 from .defaults import DEFAULT_BASE_URL
 from .errors import BluffedError, TableError
+from .money import fmt_usdc
 from .observation import Observation, parse_observation
 from .tiers import DEFAULT_TIER_ID, get_tier
+
+OnEvent = Callable[[str, dict], None]
+
+
+def default_log(kind: str, data: dict) -> None:
+    """Plain-text fallback for `on_event` — used whenever a caller (a
+    hand-rolled script, `run_forever`, whichever) doesn't wire up its own
+    handler, so connecting/playing is never silent by default. A caller
+    that wants quiet can still pass `on_event=lambda *a: None` explicitly."""
+    if kind == "connecting":
+        print("Connecting...")
+    elif kind == "connected":
+        print("Connected.")
+    elif kind == "waiting_for_players":
+        print(f"Waiting for other players ({data['seats']}/{data['max_seats']} seated)...")
+    elif kind == "hand_complete":
+        delta = data.get("chips_delta", 0)
+        outcome = "won" if delta > 0 else "lost" if delta < 0 else "pushed"
+        print(f"Hand #{data.get('hands')}: {outcome} {fmt_usdc(abs(delta))}")
+    elif kind == "funded":
+        print(f"Funded agent with {fmt_usdc(data['micros'])}")
+    elif kind == "swept":
+        print(f"Swept {fmt_usdc(data.get('micros') or 0)} back to owner")
+    elif kind == "tier_changed":
+        print(f"Moved from tier {data['from']} to {data['to']}")
+    elif kind == "error":
+        print(f"Error: {data.get('error')}")
+    else:
+        print(f"{kind}: {data}")
 
 
 def _default_buy_in(tier_id: str) -> int:
@@ -30,6 +60,7 @@ class BluffedTableEnv:
         buy_in: Optional[int] = None,
         connect_timeout: float = 10.0,
         step_timeout: float = 30.0,
+        on_event: Optional[OnEvent] = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -37,6 +68,7 @@ class BluffedTableEnv:
         self.buy_in = buy_in if buy_in is not None else _default_buy_in(tier_id)
         self.connect_timeout = connect_timeout
         self.step_timeout = step_timeout
+        self.on_event = on_event
 
         self._ws: Optional[websocket.WebSocket] = None
         self._recv_thread: Optional[threading.Thread] = None
@@ -91,8 +123,15 @@ class BluffedTableEnv:
             return obs
         return None
 
+    def _emit(self, kind: str, data: dict) -> None:
+        if self.on_event is not None:
+            self.on_event(kind, data)
+        else:
+            default_log(kind, data)
+
     def _await_turn_or_terminal(self, timeout: float) -> Observation:
         deadline = time.monotonic() + timeout
+        announced_waiting = False
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -101,6 +140,11 @@ class BluffedTableEnv:
             obs = self._handle_message(msg)
             if obs is None:
                 continue
+            # Not a bug, just nobody else at the table yet — surface it once so
+            # a caller waiting on step_timeout can tell "stuck" from "normal".
+            if obs.phase == "waiting" and not announced_waiting:
+                announced_waiting = True
+                self._emit("waiting_for_players", {"seats": len(obs.players), "max_seats": obs.max_seats})
             if obs.hand_over or obs.my_turn:
                 return obs
 
@@ -116,8 +160,10 @@ class BluffedTableEnv:
         self._closed.clear()
         self._messages = queue.Queue()
 
+        self._emit("connecting", {"tier_id": self.tier_id})
         ws = websocket.create_connection(self._ws_url(), timeout=self.connect_timeout)
         self._ws = ws
+        self._emit("connected", {})
         self._recv_thread = threading.Thread(target=self._recv_loop, args=(ws,), daemon=True)
         self._recv_thread.start()
 

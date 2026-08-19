@@ -8,10 +8,11 @@ class FakeObs:
 
 
 class FakeEnv:
-    def __init__(self, api_key, base_url="https://bluffed.online", tier_id="t_low"):
+    def __init__(self, api_key, base_url="https://bluffed.online", tier_id="t_low", on_event=None):
         self.api_key = api_key
         self.base_url = base_url
         self.tier_id = tier_id
+        self.on_event = on_event
         self.closed = False
 
     def reset(self):
