@@ -21,8 +21,9 @@ class AccountClient:
     request after that, so this can fund, sweep, deposit, and withdraw
     without a human clicking through the UI."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL):
+    def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: float = 15.0):
         self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
         self._http = requests.Session()
 
     def sign_in(self, email: str, password: str) -> None:
@@ -92,12 +93,22 @@ class AccountClient:
         self._http.cookies.update(cookies)
 
     def _get(self, path: str) -> dict:
-        resp = self._http.get(f"{self.base_url}{path}")
+        resp = self._request(self._http.get, f"{self.base_url}{path}", timeout=self.timeout)
         return self._unwrap(resp)
 
     def _post(self, path: str, body: dict) -> dict:
-        resp = self._http.post(f"{self.base_url}{path}", json=body)
+        resp = self._request(self._http.post, f"{self.base_url}{path}", json=body, timeout=self.timeout)
         return self._unwrap(resp)
+
+    def _request(self, method, *args, **kwargs) -> requests.Response:
+        try:
+            return method(*args, **kwargs)
+        except requests.RequestException as exc:
+            # A timeout or connection failure raises the raw requests
+            # exception, not an AccountError — every other failure mode
+            # from this class (4xx/5xx, bad JSON) already comes back as
+            # one, so callers only have to handle one exception type.
+            raise AccountError(str(exc)) from exc
 
     def _unwrap(self, resp: requests.Response) -> dict:
         if not resp.ok:
