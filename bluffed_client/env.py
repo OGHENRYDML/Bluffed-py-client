@@ -77,6 +77,7 @@ class BluffedTableEnv:
 
         self._last_obs: Optional[Observation] = None
         self._prev_chips: Optional[int] = None
+        self._seated = False
 
     @property
     def last_observation(self) -> Optional[Observation]:
@@ -169,6 +170,7 @@ class BluffedTableEnv:
 
         self._send({"type": "sit", "buyIn": self.buy_in})
         obs = self._await_turn_or_terminal(timeout=self.step_timeout)
+        self._seated = True
         self._prev_chips = self._chips_now(obs)
         me = obs.me
         return obs, {"my_id": me.id if me else None}
@@ -201,8 +203,22 @@ class BluffedTableEnv:
     def leave(self) -> None:
         if self._ws:
             self._send({"type": "leave"})
+        self._seated = False
 
     def close(self) -> None:
+        # The server never drops a merely-disconnected player from their
+        # seat (only an explicit "leave" does) — closing the socket while
+        # still seated without this would leave a permanent zombie seat,
+        # and the *next* reset() on this env would come back
+        # already_seated since the old one was never actually stood up.
+        if self._seated and self._ws:
+            try:
+                self._ws.send(json.dumps({"type": "leave"}))
+                time.sleep(0.2)
+            except Exception:
+                pass
+            self._seated = False
+
         self._closed.set()
         if self._ws:
             try:
