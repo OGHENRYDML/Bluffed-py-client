@@ -9,7 +9,16 @@ from .format import fmt_usdc
 console = Console()
 
 MODE_STYLE = {"llm": "bold cyan", "fast": "bold yellow"}
-EVENT_STYLE = {"funded": "cyan", "swept": "green", "hand_complete": "dim", "error": "bold red", "tier_changed": "bold yellow"}
+EVENT_STYLE = {
+    "funded": "cyan",
+    "swept": "green",
+    "hand_complete": "dim",
+    "error": "bold red",
+    "tier_changed": "bold yellow",
+    "connecting": "dim",
+    "connected": "dim",
+    "waiting_for_players": "yellow",
+}
 
 
 def signed_in(base_url: str, wallet_address: Optional[str] = None) -> None:
@@ -67,6 +76,12 @@ def hand_result(i: int, total: int, phase: str, reward: float) -> None:
 
 
 def event(kind: str, data: dict) -> None:
+    if kind == "hand_complete" and "chips_delta" in data:
+        delta = data["chips_delta"]
+        outcome = "won" if delta > 0 else "lost" if delta < 0 else "pushed"
+        color = "green" if delta > 0 else "red" if delta < 0 else "dim"
+        console.print(f"[dim]▸ hand #{data['hands']}[/dim]  [{color}]{outcome} {fmt_usdc(abs(delta))}[/{color}]")
+        return
     style = EVENT_STYLE.get(kind, "white")
     console.print(f"[{style}]▸ {kind}[/{style}]  {data}")
 

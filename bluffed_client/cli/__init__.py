@@ -230,7 +230,7 @@ def play(
     key = _resolve_key(agent_id, agent_key)
     _require_tier(tier)
     buy_in_micros = to_micros(buy_in) if buy_in is not None else None
-    env = BluffedTableEnv(key, base_url=base_url, tier_id=tier, buy_in=buy_in_micros)
+    env = BluffedTableEnv(key, base_url=base_url, tier_id=tier, buy_in=buy_in_micros, on_event=ui.event)
     strat = _load_strategy_module(strategy_module)
     try:
         for i in range(hands):

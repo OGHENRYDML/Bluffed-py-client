@@ -75,6 +75,7 @@ def run_forever(
     hands = 0
     emit = on_event or (lambda kind, data: None)
     current_env = env
+    current_env.on_event = emit
 
     while max_hands is None or hands < max_hands:
         try:
@@ -104,18 +105,20 @@ def run_forever(
                     from_tier = current_env.tier_id
                     current_env.close()
                     current_env = BluffedTableEnv(
-                        current_env.api_key, base_url=current_env.base_url, tier_id=target.id
+                        current_env.api_key, base_url=current_env.base_url, tier_id=target.id, on_event=emit
                     )
                     emit("tier_changed", {"from": from_tier, "to": target.id})
 
             obs, _info = current_env.reset()
+            hand_reward = 0.0
             while not obs.hand_over:
-                obs, _reward, terminated, truncated, _info = current_env.step(strategy(obs))
+                obs, reward, terminated, truncated, _info = current_env.step(strategy(obs))
+                hand_reward += reward
                 if terminated or truncated:
                     break
             current_env.leave()
             hands += 1
-            emit("hand_complete", {"hands": hands})
+            emit("hand_complete", {"hands": hands, "chips_delta": hand_reward, "won": hand_reward > 0})
         except Exception as exc:  # noqa: BLE001 - keep the loop alive on any failure
             emit("error", {"error": str(exc)})
             time.sleep(retry_delay)
