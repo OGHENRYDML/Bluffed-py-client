@@ -44,7 +44,7 @@ class ScriptedWs:
         self._closed.set()
 
 
-def _player(seat=0, chips=1000):
+def _player(seat=0, chips=1000, has_acted=False):
     return {
         "id": "me",
         "name": "me",
@@ -53,6 +53,7 @@ def _player(seat=0, chips=1000):
         "bet": 0,
         "folded": False,
         "allIn": False,
+        "hasActed": has_acted,
         "sittingOut": False,
         "connected": True,
         "isYou": True,
@@ -60,7 +61,9 @@ def _player(seat=0, chips=1000):
     }
 
 
-def _state_msg(phase, current_turn_seat=None, max_seats=6, hand_number=1):
+def _state_msg(phase, current_turn_seat=None, max_seats=6, hand_number=1, has_acted=False, me_seat=None):
+    if me_seat is None:
+        me_seat = current_turn_seat or 0
     return {
         "type": "state",
         "state": {
@@ -76,7 +79,7 @@ def _state_msg(phase, current_turn_seat=None, max_seats=6, hand_number=1):
             "bigBlind": 2,
             "pot": 0,
             "community": [],
-            "players": [_player(seat=current_turn_seat or 0)],
+            "players": [_player(seat=me_seat, has_acted=has_acted)],
             "winners": None,
             "log": [],
         },
@@ -283,6 +286,63 @@ def test_reset_does_not_retry_a_non_transient_table_error(monkeypatch):
     with pytest.raises(TableError):
         env.reset()
     assert len(attempts) == 1
+
+
+def test_require_acted_skips_a_stale_rebroadcast_of_the_turn_just_acted_on():
+    # The exact live bug: another player sitting down elsewhere broadcasts
+    # to everyone, including a socket mid-turn waiting on its own
+    # already-sent action. That rebroadcast still shows my_turn=True with
+    # hasActed still false, because the action hasn't landed yet — it must
+    # not be mistaken for a fresh decision point.
+    env = BluffedTableEnv("bk_live_fake")
+    env._messages = queue.Queue()
+    env._messages.put(_state_msg("preflop", current_turn_seat=0, has_acted=False))  # stale: pre-action
+    # real: turn moved to the opponent (seat 1) — "me" stays at seat 0
+    env._messages.put(_state_msg("preflop", current_turn_seat=1, has_acted=False, me_seat=0))
+
+    obs = env._await_turn_or_terminal(timeout=1.0, require_acted=True)
+
+    assert obs.current_turn_seat == 1
+    assert obs.my_turn is False  # confirms the action was processed; nothing to act on
+
+
+def test_require_acted_accepts_hasActed_true_on_an_immediate_next_turn():
+    # Rare heads-up edge case: every other player is folded/all-in and it's
+    # immediately this seat's turn again — hasActed already true is just as
+    # valid a "my action landed" signal as the turn moving away.
+    env = BluffedTableEnv("bk_live_fake")
+    env._messages = queue.Queue()
+    env._messages.put(_state_msg("preflop", current_turn_seat=0, has_acted=False))  # stale: pre-action
+    env._messages.put(_state_msg("preflop", current_turn_seat=0, has_acted=True))  # real: acted, my turn again
+
+    obs = env._await_turn_or_terminal(timeout=1.0, require_acted=True)
+
+    assert obs.my_turn is True
+    assert obs.me.has_acted is True
+
+
+def test_require_acted_still_returns_immediately_on_hand_over():
+    env = BluffedTableEnv("bk_live_fake")
+    env._messages = queue.Queue()
+    env._messages.put(_state_msg("preflop", current_turn_seat=0, has_acted=False))  # stale: pre-action
+    env._messages.put(_state_msg("handComplete"))
+
+    obs = env._await_turn_or_terminal(timeout=1.0, require_acted=True)
+
+    assert obs.hand_over is True
+
+
+def test_require_acted_false_is_unaffected_by_hasActed():
+    # The default (reset()'s normal "wait for my turn") behavior must stay
+    # exactly as it was — the very first my_turn=True, unacted state is
+    # legitimately what it's waiting for, not something to skip past.
+    env = BluffedTableEnv("bk_live_fake")
+    env._messages = queue.Queue()
+    env._messages.put(_state_msg("preflop", current_turn_seat=0, has_acted=False))
+
+    obs = env._await_turn_or_terminal(timeout=1.0)
+
+    assert obs.my_turn is True
 
 
 def test_reset_reconnects_when_marked_seated_but_the_connection_died(monkeypatch):
