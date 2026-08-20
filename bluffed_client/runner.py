@@ -56,7 +56,8 @@ def run_forever(
     max_hands: Optional[int] = None,
     retry_delay: float = 5.0,
     on_event: Optional[OnEvent] = None,
-    auto_tier: bool = False,
+    auto_tier: bool = True,
+    hop_after_losses: Optional[int] = 5,
 ) -> None:
     """Play hands back to back, forever (or until `max_hands`), keeping the
     agent's own balance within [min_reserve, sweep_above] by pulling from
@@ -67,14 +68,27 @@ def run_forever(
     connection, pauses `retry_delay` seconds, and reconnects on the next
     attempt rather than raising.
 
-    `auto_tier=True` moves the agent to whatever stake tier its *current*
-    balance actually affords before every hand — up when it's winning,
-    down when it's losing — instead of playing a fixed tier until it can't
-    afford the buy-in anymore. Opt-in: this changes which table the agent
-    is at, out from under whatever `tier_id` `env` was built with, and it's
-    a real behavior change someone should choose, not one silently applied.
+    `auto_tier` (on by default) moves the agent to whatever stake tier its
+    *current* balance actually affords before every hand — up when it's
+    winning, down when it's losing — instead of playing a fixed tier until
+    it can't afford the buy-in anymore. Pass `auto_tier=False` to keep a
+    fixed tier (whatever `tier_id` `env` was built with) regardless of
+    balance.
+
+    `hop_after_losses` (default 5) leaves the current table for a fresh
+    one at the same tier — different opponents — after that many
+    consecutive losing hands (a push or a win resets the count). A losing
+    streak that hasn't dropped the balance enough for auto_tier to react
+    isn't a bankroll problem, but it's still worth trying different
+    opponents rather than grinding against the same table indefinitely.
+    Skipped for whichever hand auto_tier already reconnected on, so the
+    two never both fire off the same streak. Pass `hop_after_losses=None`
+    to disable. Note this is a best-effort nudge, not a guarantee: table
+    assignment can still land back on the same table you just left if it's
+    the best-available slot (e.g. you were the only one on it).
     """
     hands = 0
+    consecutive_losses = 0
     emit = on_event or default_log
     current_env = env
     current_env.on_event = emit
@@ -102,6 +116,7 @@ def run_forever(
                         emit("swept", {"micros": amount})
                         available -= amount
 
+                reconnected = False
                 if auto_tier:
                     target = _pick_tier_for_balance(available)
                     if target.id != current_env.tier_id:
@@ -111,6 +126,17 @@ def run_forever(
                             current_env.api_key, base_url=current_env.base_url, tier_id=target.id, on_event=emit
                         )
                         emit("tier_changed", {"from": from_tier, "to": target.id})
+                        reconnected = True
+                        consecutive_losses = 0
+
+                if not reconnected and hop_after_losses is not None and consecutive_losses >= hop_after_losses:
+                    tier_id = current_env.tier_id
+                    current_env.close()
+                    current_env = BluffedTableEnv(
+                        current_env.api_key, base_url=current_env.base_url, tier_id=tier_id, on_event=emit
+                    )
+                    emit("table_hopped", {"tier": tier_id, "after_losses": consecutive_losses})
+                    consecutive_losses = 0
 
                 obs, _info = current_env.reset()
                 hand_reward = 0.0
@@ -120,6 +146,7 @@ def run_forever(
                     if terminated or truncated:
                         break
                 hands += 1
+                consecutive_losses = consecutive_losses + 1 if hand_reward < 0 else 0
                 emit("hand_complete", {"hands": hands, "chips_delta": hand_reward, "won": hand_reward > 0})
             except Exception as exc:  # noqa: BLE001 - keep the loop alive on any failure
                 emit("error", {"error": str(exc)})
@@ -146,7 +173,8 @@ class TableConfig:
     sweep_down_to: Optional[int] = None
     max_hands: Optional[int] = None
     retry_delay: float = 5.0
-    auto_tier: bool = False
+    auto_tier: bool = True
+    hop_after_losses: Optional[int] = 5
 
 
 def run_forever_multi(configs: List[TableConfig], on_event: Optional[OnEvent] = None) -> None:
@@ -179,6 +207,7 @@ def run_forever_multi(configs: List[TableConfig], on_event: Optional[OnEvent] = 
             retry_delay=config.retry_delay,
             on_event=tagged_emit,
             auto_tier=config.auto_tier,
+            hop_after_losses=config.hop_after_losses,
         )
 
     threads = [threading.Thread(target=run_one, args=(c,), daemon=True) for c in configs]

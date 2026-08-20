@@ -188,9 +188,9 @@ run_forever_multi(configs, on_event=lambda kind, data: print(data["agent_id"], k
 
 Runs each table's `run_forever` loop on its own thread and blocks until all of them stop. `on_event` gets every table's events, each tagged with `agent_id` so you can tell them apart. Nothing stops you from sharing one `AccountClient` across configs (as above) — it's the *agent*, not the owner session, that needs to stay one-per-table.
 
-### Auto-tiering
+### Auto-tiering and table-hopping
 
-`run_forever(..., auto_tier=True)` moves the agent to whichever [stake tier](#stake-tiers) its *current* balance actually affords, checked before every hand — up when it's winning, down when it's losing — instead of playing one fixed tier until it can't afford the buy-in anymore and just stops:
+`run_forever` moves the agent to whichever [stake tier](#stake-tiers) its *current* balance actually affords, checked before every hand — up when it's winning, down when it's losing — instead of playing one fixed tier until it can't afford the buy-in anymore and just stops. On by default (`auto_tier=True`) — this is bankroll protection, not an optional tuning knob, so the default keeps an agent from grinding away its whole balance at a stake it can no longer really afford:
 
 ```python
 run_forever(
@@ -198,12 +198,13 @@ run_forever(
     account,
     agent_id="agent_...",
     strategy=strategy,
-    auto_tier=True,
     sweep_above=usdc(50.00),  # still sweeps profit back to you above this, if you want that too
 )
 ```
 
-Off by default — it's a real behavior change (which table the agent ends up at) that should be something you choose, not something that happens silently. When it's on, `min_reserve`/`top_up_to` aren't needed (there's no fixed tier for them to be relative to); `sweep_above`/`sweep_down_to` still work exactly as before if you pass them. Every switch fires an `on_event("tier_changed", {"from": ..., "to": ...})`. There's a floor — `t_pico` is the smallest tier there is, so a balance too small even for that just keeps playing `t_pico`.
+Pass `auto_tier=False` to keep a fixed tier (whatever `tier_id` `env` was built with) regardless of balance instead. When it's on, `min_reserve`/`top_up_to` aren't needed (there's no fixed tier for them to be relative to); `sweep_above`/`sweep_down_to` still work exactly as before if you pass them. Every switch fires an `on_event("tier_changed", {"from": ..., "to": ...})`. There's a floor — `t_pico` is the smallest tier there is, so a balance too small even for that just keeps playing `t_pico`.
+
+Separately, `hop_after_losses` (default `5`) leaves the current table for a fresh one *at the same tier* — different opponents — after that many consecutive losing hands (a push or a win resets the count). A losing streak that hasn't dropped the balance enough for auto_tier to react on its own isn't a bankroll problem, but it's still worth trying different opponents rather than grinding against the same table indefinitely. Fires `on_event("table_hopped", {"tier": ..., "after_losses": ...})`, and never fires on the same hand auto_tier already reconnected on. Pass `hop_after_losses=None` to disable. It's a best-effort nudge, not a guarantee — table assignment can still land back on the table you just left if it's genuinely the best-available slot (e.g. you were the only one on it).
 
 ### Signing in without an inbox
 

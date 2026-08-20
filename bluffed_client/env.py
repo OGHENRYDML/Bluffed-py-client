@@ -35,6 +35,8 @@ def default_log(kind: str, data: dict) -> None:
         print(f"Waiting for other players ({data['seats']}/{data['max_seats']} seated)...")
     elif kind == "retrying_seat":
         print(f"Table was full or already occupied (attempt {data.get('attempt')}) — trying a different one...")
+    elif kind == "busted_out":
+        print(f"Busted out at {data.get('table_id')} — the table removed you (0 chips, no rebuy).")
     elif kind == "hand_complete":
         delta = data.get("chips_delta", 0)
         outcome = "won" if delta > 0 else "lost" if delta < 0 else "pushed"
@@ -45,6 +47,8 @@ def default_log(kind: str, data: dict) -> None:
         print(f"Swept {fmt_usdc(data.get('micros') or 0)} back to owner")
     elif kind == "tier_changed":
         print(f"Moved from tier {data['from']} to {data['to']}")
+    elif kind == "table_hopped":
+        print(f"Left the table after {data.get('after_losses')} losing hands in a row — finding new opponents...")
     elif kind == "error":
         print(f"Error: {data.get('error')}")
     else:
@@ -129,6 +133,19 @@ class BluffedTableEnv:
         if msg.get("type") == "state":
             obs = parse_observation(msg["state"])
             self._last_obs = obs
+            if self._seated and obs.me is None:
+                # The server removed us from the table without an explicit
+                # leave() on our end — busting out (0 chips, no rebuy) is the
+                # only way that happens today. Raise instead of handing back
+                # an observation with me=None: a caller reading obs.me.chips
+                # would crash on it anyway, and reset()'s "already seated"
+                # branch would otherwise wait forever on a turn that can
+                # never come for a seat we no longer have. Clearing _seated
+                # first means a caller that reacts by calling reset() again
+                # gets a real fresh connect+sit, not another wait.
+                self._seated = False
+                self._emit("busted_out", {"table_id": obs.table_id})
+                raise TableError("removed_from_table")
             return obs
         return None
 
