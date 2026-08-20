@@ -1,7 +1,11 @@
 import json
 import queue
+import threading
+
+import pytest
 
 from bluffed_client.env import BluffedTableEnv
+from bluffed_client.errors import TableError
 from bluffed_client.observation import parse_observation
 
 
@@ -14,6 +18,30 @@ class FakeWs:
 
     def close(self):
         pass
+
+
+class ScriptedWs:
+    """Stands in for a real websocket.WebSocket: recv() hands out a fixed
+    list of pre-built messages in order, then blocks (like a real idle
+    socket would) until close() — used to drive reset()'s real connect
+    path, background recv thread included, without a real network socket."""
+
+    def __init__(self, messages):
+        self._messages = list(messages)
+        self._closed = threading.Event()
+        self.sent = []
+
+    def recv(self):
+        if self._messages:
+            return json.dumps(self._messages.pop(0))
+        self._closed.wait()
+        raise OSError("closed")
+
+    def send(self, data):
+        self.sent.append(data)
+
+    def close(self):
+        self._closed.set()
 
 
 def _player(seat=0, chips=1000):
@@ -179,6 +207,82 @@ def test_reset_reconnects_when_not_currently_seated(monkeypatch):
         assert False, "expected the sentinel RuntimeError from create_connection"
     except RuntimeError as exc:
         assert "sentinel" in str(exc)
+
+
+def test_reset_mid_hand_does_not_wait_for_a_new_hand_to_start():
+    # reset() is also used to recover from a truncated step (e.g.
+    # not_your_turn from an action based on a stale local view) — not just
+    # to advance between hands. If the last obs we saw wasn't itself
+    # hand_over, there's no "already-seen hand end" to skip past, and
+    # filtering by hand_number would wrongly wait for the *next* hand
+    # instead of noticing we're already back on the clock in this one.
+    env = BluffedTableEnv("bk_live_fake", step_timeout=1.0)
+    env._ws = FakeWs()
+    env._seated = True
+    env._last_obs = parse_observation(_state_msg("preflop", hand_number=1)["state"])  # not hand_over
+    assert not env._last_obs.hand_over
+    env._messages = queue.Queue()
+    env._messages.put(_state_msg("preflop", current_turn_seat=0, hand_number=1))  # still hand 1, my turn now
+
+    obs, _info = env.reset()
+
+    assert obs.hand_number == 1
+    assert obs.my_turn
+
+
+def test_reset_retries_a_fresh_connect_on_a_transient_table_error(monkeypatch):
+    import bluffed_client.env as env_module
+
+    sockets = [
+        ScriptedWs([{"type": "error", "error": "table_full"}]),
+        ScriptedWs([_state_msg("preflop", current_turn_seat=0, hand_number=1)]),
+    ]
+    monkeypatch.setattr(env_module.websocket, "create_connection", lambda url, timeout: sockets.pop(0))
+    monkeypatch.setattr(env_module.time, "sleep", lambda *_: None)  # skip the real backoff
+
+    env = BluffedTableEnv("bk_live_fake", step_timeout=2.0, connect_timeout=1.0)
+    events = []
+    env.on_event = lambda kind, data: events.append((kind, data))
+
+    obs, _info = env.reset()
+
+    assert obs.hand_number == 1
+    assert env._seated is True
+    assert [k for k, _d in events] == ["connecting", "connected", "retrying_seat", "connecting", "connected"]
+
+
+def test_reset_gives_up_after_exhausting_retries(monkeypatch):
+    import bluffed_client.env as env_module
+
+    monkeypatch.setattr(
+        env_module.websocket,
+        "create_connection",
+        lambda url, timeout: ScriptedWs([{"type": "error", "error": "table_full"}]),
+    )
+    monkeypatch.setattr(env_module.time, "sleep", lambda *_: None)
+
+    env = BluffedTableEnv("bk_live_fake", step_timeout=2.0, connect_timeout=1.0)
+
+    with pytest.raises(TableError):
+        env.reset()
+
+
+def test_reset_does_not_retry_a_non_transient_table_error(monkeypatch):
+    import bluffed_client.env as env_module
+
+    attempts = []
+
+    def fake_create_connection(url, timeout):
+        attempts.append(1)
+        return ScriptedWs([{"type": "error", "error": "buyin_out_of_range"}])
+
+    monkeypatch.setattr(env_module.websocket, "create_connection", fake_create_connection)
+
+    env = BluffedTableEnv("bk_live_fake", step_timeout=2.0, connect_timeout=1.0)
+
+    with pytest.raises(TableError):
+        env.reset()
+    assert len(attempts) == 1
 
 
 def test_reset_reconnects_when_marked_seated_but_the_connection_died(monkeypatch):

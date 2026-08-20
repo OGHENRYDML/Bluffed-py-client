@@ -15,6 +15,12 @@ from .tiers import DEFAULT_TIER_ID, get_tier
 
 OnEvent = Callable[[str, dict], None]
 
+# Errors a fresh connect+sit is worth retrying for — both are inherent to
+# table assignment being a soft, racy index rather than an outright "you
+# can never do this" rejection. See reset()'s retry loop.
+_TRANSIENT_SIT_ERRORS = {"table_full", "same_owner_already_seated"}
+_MAX_SIT_ATTEMPTS = 4
+
 
 def default_log(kind: str, data: dict) -> None:
     """Plain-text fallback for `on_event` — used whenever a caller (a
@@ -27,6 +33,8 @@ def default_log(kind: str, data: dict) -> None:
         print("Connected.")
     elif kind == "waiting_for_players":
         print(f"Waiting for other players ({data['seats']}/{data['max_seats']} seated)...")
+    elif kind == "retrying_seat":
+        print(f"Table was full or already occupied (attempt {data.get('attempt')}) — trying a different one...")
     elif kind == "hand_complete":
         delta = data.get("chips_delta", 0)
         outcome = "won" if delta > 0 else "lost" if delta < 0 else "pushed"
@@ -175,28 +183,52 @@ class BluffedTableEnv:
         # one of them can slip past a guard that's only ever supposed to
         # allow one seat per owner per table.
         if self._ws is not None and self._seated and not self._closed.is_set():
-            obs = self._await_turn_or_terminal(timeout=self.step_timeout, after_hand_number=self._last_obs.hand_number)
+            # Only filter out a stale rebroadcast of the hand we already
+            # know ended — if the last obs we saw wasn't itself hand_over
+            # (e.g. reset() got called to recover from a mid-hand truncated
+            # step, not because the hand actually finished), there's no
+            # "already seen this hand end" state to skip past, and filtering
+            # by hand_number here would wait for the *next* hand to start
+            # even if the current one is still going and about to need us.
+            after_hand_number = self._last_obs.hand_number if self._last_obs and self._last_obs.hand_over else None
+            obs = self._await_turn_or_terminal(timeout=self.step_timeout, after_hand_number=after_hand_number)
             self._prev_chips = self._chips_now(obs)
             me = obs.me
             return obs, {"my_id": me.id if me else None}
 
-        self.close()
-        self._closed.clear()
-        self._messages = queue.Queue()
+        for attempt in range(1, _MAX_SIT_ATTEMPTS + 1):
+            self.close()
+            self._closed.clear()
+            self._messages = queue.Queue()
 
-        self._emit("connecting", {"tier_id": self.tier_id})
-        ws = websocket.create_connection(self._ws_url(), timeout=self.connect_timeout)
-        self._ws = ws
-        self._emit("connected", {})
-        self._recv_thread = threading.Thread(target=self._recv_loop, args=(ws,), daemon=True)
-        self._recv_thread.start()
+            self._emit("connecting", {"tier_id": self.tier_id})
+            ws = websocket.create_connection(self._ws_url(), timeout=self.connect_timeout)
+            self._ws = ws
+            self._emit("connected", {})
+            self._recv_thread = threading.Thread(target=self._recv_loop, args=(ws,), daemon=True)
+            self._recv_thread.start()
 
-        self._send({"type": "sit", "buyIn": self.buy_in})
-        obs = self._await_turn_or_terminal(timeout=self.step_timeout)
-        self._seated = True
-        self._prev_chips = self._chips_now(obs)
-        me = obs.me
-        return obs, {"my_id": me.id if me else None}
+            self._send({"type": "sit", "buyIn": self.buy_in})
+            try:
+                obs = self._await_turn_or_terminal(timeout=self.step_timeout)
+            except TableError as exc:
+                if exc.code in _TRANSIENT_SIT_ERRORS and attempt < _MAX_SIT_ATTEMPTS:
+                    # Table assignment is a soft, best-effort index (see
+                    # assignTable in apps/web) — several connects landing in
+                    # the same instant can all get routed to the same table
+                    # before any of their seats actually commit, so the
+                    # losers see table_full (or, rarely, the anti-collusion
+                    # check) even though a different table has room. A fresh
+                    # connect re-runs assignment from scratch, which is
+                    # usually enough to land somewhere that actually fits.
+                    self._emit("retrying_seat", {"attempt": attempt, "error": exc.code})
+                    time.sleep(0.5)
+                    continue
+                raise
+            self._seated = True
+            self._prev_chips = self._chips_now(obs)
+            me = obs.me
+            return obs, {"my_id": me.id if me else None}
 
     def step(self, action: Action) -> Tuple[Observation, float, bool, bool, dict]:
         if self._last_obs is None or not self._last_obs.my_turn:
