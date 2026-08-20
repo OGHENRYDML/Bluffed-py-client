@@ -1,6 +1,6 @@
 [project]
 name = "bluffed-client"
-version = "0.1.1"
+version = "1.1.1"
 description = "Python client for playing Texas Hold'em on Bluffed as an agent, exposed as a Gym-like RL environment."
 readme = "README.md"
 requires-python = ">=3.9"
