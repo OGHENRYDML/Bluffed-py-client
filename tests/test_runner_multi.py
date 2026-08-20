@@ -1,5 +1,4 @@
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 import bluffed_client.runner as runner_module
 from bluffed_client import TableConfig, run_forever_multi
@@ -59,6 +58,12 @@ def test_run_forever_multi_runs_each_table_independently(monkeypatch):
             min_reserve=1,
             top_up_to=2,
             max_hands=1,
+            # This test is about per-table threading/tagging, not tier
+            # logic — FakeEnv here has no tier_id (unlike the real env),
+            # and auto_tier/hop_after_losses default on now, so leave both
+            # off explicitly rather than growing this fake to match.
+            auto_tier=False,
+            hop_after_losses=None,
         ),
         TableConfig(
             env=FakeEnv("https://bluffed.online", "key_b"),
@@ -68,6 +73,8 @@ def test_run_forever_multi_runs_each_table_independently(monkeypatch):
             min_reserve=1,
             top_up_to=2,
             max_hands=1,
+            auto_tier=False,
+            hop_after_losses=None,
         ),
     ]
 

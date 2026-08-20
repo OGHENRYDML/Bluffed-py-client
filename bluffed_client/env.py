@@ -35,6 +35,8 @@ def default_log(kind: str, data: dict) -> None:
         print(f"Waiting for other players ({data['seats']}/{data['max_seats']} seated)...")
     elif kind == "retrying_seat":
         print(f"Table was full or already occupied (attempt {data.get('attempt')}) — trying a different one...")
+    elif kind == "busted_out":
+        print(f"Busted out at {data.get('table_id')} — the table removed you (0 chips, no rebuy).")
     elif kind == "hand_complete":
         delta = data.get("chips_delta", 0)
         outcome = "won" if delta > 0 else "lost" if delta < 0 else "pushed"
@@ -45,6 +47,8 @@ def default_log(kind: str, data: dict) -> None:
         print(f"Swept {fmt_usdc(data.get('micros') or 0)} back to owner")
     elif kind == "tier_changed":
         print(f"Moved from tier {data['from']} to {data['to']}")
+    elif kind == "table_hopped":
+        print(f"Left the table after {data.get('after_losses')} losing hands in a row — finding new opponents...")
     elif kind == "error":
         print(f"Error: {data.get('error')}")
     else:
@@ -129,6 +133,19 @@ class BluffedTableEnv:
         if msg.get("type") == "state":
             obs = parse_observation(msg["state"])
             self._last_obs = obs
+            if self._seated and obs.me is None:
+                # The server removed us from the table without an explicit
+                # leave() on our end — busting out (0 chips, no rebuy) is the
+                # only way that happens today. Raise instead of handing back
+                # an observation with me=None: a caller reading obs.me.chips
+                # would crash on it anyway, and reset()'s "already seated"
+                # branch would otherwise wait forever on a turn that can
+                # never come for a seat we no longer have. Clearing _seated
+                # first means a caller that reacts by calling reset() again
+                # gets a real fresh connect+sit, not another wait.
+                self._seated = False
+                self._emit("busted_out", {"table_id": obs.table_id})
+                raise TableError("removed_from_table")
             return obs
         return None
 
@@ -138,12 +155,26 @@ class BluffedTableEnv:
         else:
             default_log(kind, data)
 
-    def _await_turn_or_terminal(self, timeout: float, after_hand_number: Optional[int] = None) -> Observation:
+    def _await_turn_or_terminal(
+        self, timeout: float, after_hand_number: Optional[int] = None, require_acted: bool = False
+    ) -> Observation:
         # `after_hand_number` is set when we're already seated and waiting
         # for the *next* hand on the same connection (see reset()) — without
         # it, a late/duplicate broadcast of the hand that just ended would
         # satisfy `obs.hand_over` immediately and we'd report a hand as
         # played without ever having seen a card of it.
+        #
+        # `require_acted` is set by step(), after it's already sent an
+        # action — every mutation broadcasts to every socket, including
+        # ones that don't touch the current hand at all (another player
+        # sitting down elsewhere, a disconnect tick), and a broadcast that
+        # landed before the server got around to processing *our* action
+        # looks identical to a genuine "it's your turn" state: my_turn,
+        # phase, pot, current_bet all still read exactly as they did before
+        # we acted. hasActed is the one field that actually flips once the
+        # action is processed, so once we're waiting on our own action's
+        # result, "still my turn, still haven't acted" can only mean this
+        # broadcast predates it — keep waiting instead of resending.
         deadline = time.monotonic() + timeout
         announced_waiting = False
         while True:
@@ -161,7 +192,19 @@ class BluffedTableEnv:
                 self._emit("waiting_for_players", {"seats": len(obs.players), "max_seats": obs.max_seats})
             if after_hand_number is not None and obs.hand_number == after_hand_number:
                 continue
-            if obs.hand_over or obs.my_turn:
+            if obs.hand_over:
+                return obs
+            if require_acted:
+                # Confirmation our action was processed is the turn moving
+                # away from us, or (rare — every other player folded/all-in
+                # and it's immediately our turn again) hasActed already
+                # showing true. "Still my turn, still haven't acted" is the
+                # one state that can only be a stale pre-action rebroadcast.
+                me = obs.me
+                if not obs.my_turn or (me is not None and me.has_acted):
+                    return obs
+                continue
+            if obs.my_turn:
                 return obs
 
     def _chips_now(self, obs: Optional[Observation] = None) -> Optional[int]:
@@ -238,7 +281,7 @@ class BluffedTableEnv:
         self._send({"type": "action", "action": action.to_wire()})
 
         try:
-            obs = self._await_turn_or_terminal(timeout=self.step_timeout)
+            obs = self._await_turn_or_terminal(timeout=self.step_timeout, require_acted=True)
         except TableError as exc:
             # A real error the server sent back (not_your_turn,
             # same_owner_already_seated, ...) — TableError is a BluffedError

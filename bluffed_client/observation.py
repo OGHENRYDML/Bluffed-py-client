@@ -13,6 +13,7 @@ class PlayerView:
     bet: int
     folded: bool
     all_in: bool
+    has_acted: bool
     sitting_out: bool
     connected: bool
     is_you: bool
@@ -100,6 +101,7 @@ def _parse_player(raw: dict) -> PlayerView:
         bet=raw["bet"],
         folded=raw["folded"],
         all_in=raw["allIn"],
+        has_acted=raw["hasActed"],
         sitting_out=raw["sittingOut"],
         connected=raw["connected"],
         is_you=raw["isYou"],
