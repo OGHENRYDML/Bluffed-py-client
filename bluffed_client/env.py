@@ -114,6 +114,20 @@ class BluffedTableEnv:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
+            if msg.get("type") == "ping":
+                # Answered right here in the recv thread, not queued for the
+                # caller to pick up — the server is probing whether this
+                # connection is still alive at all (see PING_CHECK_INTERVAL_MS
+                # server-side), and the caller's main thread could be off
+                # doing something slow (an LLM call, a long dumb_strategy)
+                # that has nothing to do with whether the socket itself is
+                # still good. Replying from the queue would tie "are you
+                # alive" to "are you currently free", which defeats the point.
+                try:
+                    ws.send(json.dumps({"type": "pong"}))
+                except Exception:
+                    pass
+                continue
             self._messages.put(msg)
 
     def _send(self, payload: dict) -> None:
