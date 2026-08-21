@@ -3,7 +3,7 @@ from .actions import Action, allin, call, check, fold, raise_to
 from .agent_self import get_agent_status
 from .defaults import DEFAULT_BASE_URL
 from .env import BluffedTableEnv, default_log
-from .errors import BluffedError, TableError
+from .errors import BluffedError, StillWaitingAlone, TableError
 from .money import fmt_usdc, usdc
 from .observation import Observation, PlayerView, parse_observation
 from .runner import TableConfig, decide_bankroll_action, run_forever, run_forever_multi
@@ -24,6 +24,7 @@ __all__ = [
     "parse_observation",
     "BluffedError",
     "TableError",
+    "StillWaitingAlone",
     "AccountClient",
     "AccountError",
     "get_agent_status",

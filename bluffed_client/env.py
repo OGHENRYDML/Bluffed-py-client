@@ -8,7 +8,7 @@ import websocket
 
 from .actions import Action
 from .defaults import DEFAULT_BASE_URL
-from .errors import BluffedError, TableError
+from .errors import BluffedError, StillWaitingAlone, TableError
 from .money import fmt_usdc
 from .observation import Observation, parse_observation
 from .tiers import DEFAULT_TIER_ID, get_tier
@@ -20,6 +20,17 @@ OnEvent = Callable[[str, dict], None]
 # can never do this" rejection. See reset()'s retry loop.
 _TRANSIENT_SIT_ERRORS = {"table_full", "same_owner_already_seated"}
 _MAX_SIT_ATTEMPTS = 4
+
+# How long a *fresh* connect+sit will sit in phase "waiting" with no second
+# player before giving up on this specific table and trying assignTable
+# again. assignTable's atomic seat reservation guarantees no table is ever
+# oversold — several near-simultaneous connects can still land on different
+# tables instead of converging on one, though (a burst of joins racing each
+# other, not a correctness bug — see assignTable's own notes). Without this,
+# the unlucky one just sits alone for the full step_timeout before failing
+# outright; this retries well before that, same as a table_full/
+# same_owner_already_seated rejection already does.
+_LONELY_WAIT_TIMEOUT = 12.0
 
 
 def default_log(kind: str, data: dict) -> None:
@@ -170,7 +181,11 @@ class BluffedTableEnv:
             default_log(kind, data)
 
     def _await_turn_or_terminal(
-        self, timeout: float, after_hand_number: Optional[int] = None, require_acted: bool = False
+        self,
+        timeout: float,
+        after_hand_number: Optional[int] = None,
+        require_acted: bool = False,
+        lonely_wait_timeout: Optional[float] = None,
     ) -> Observation:
         # `after_hand_number` is set when we're already seated and waiting
         # for the *next* hand on the same connection (see reset()) — without
@@ -191,11 +206,35 @@ class BluffedTableEnv:
         # broadcast predates it — keep waiting instead of resending.
         deadline = time.monotonic() + timeout
         announced_waiting = False
+        waiting_since: Optional[float] = None
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise BluffedError("timed out waiting for the table")
-            msg = self._next_message(remaining)
+            # Whichever deadline is sooner wins the wait — but *which one*
+            # matters too: if nothing else ever broadcasts again (the
+            # realistic case for a table that's genuinely alone, not just a
+            # late message), _next_message() below times out and raises the
+            # generic BluffedError on its own, never reaching a fresh loop
+            # iteration where the plain `remaining <= 0` check above could
+            # tell the two deadlines apart. lonely_limited records which one
+            # this particular wait was actually bounded by, so a timeout can
+            # still be attributed correctly even when it's discovered inside
+            # _next_message() instead of at the top of this loop.
+            lonely_limited = False
+            if lonely_wait_timeout is not None and waiting_since is not None:
+                lonely_remaining = waiting_since + lonely_wait_timeout - time.monotonic()
+                if lonely_remaining <= 0:
+                    raise StillWaitingAlone(f"still alone after {lonely_wait_timeout}s — likely landed on a fragmented table")
+                if lonely_remaining < remaining:
+                    remaining = lonely_remaining
+                    lonely_limited = True
+            try:
+                msg = self._next_message(remaining)
+            except BluffedError:
+                if lonely_limited:
+                    raise StillWaitingAlone(f"still alone after {lonely_wait_timeout}s — likely landed on a fragmented table")
+                raise
             obs = self._handle_message(msg)
             if obs is None:
                 continue
@@ -204,6 +243,11 @@ class BluffedTableEnv:
             if obs.phase == "waiting" and not announced_waiting:
                 announced_waiting = True
                 self._emit("waiting_for_players", {"seats": len(obs.players), "max_seats": obs.max_seats})
+            if obs.phase == "waiting":
+                if waiting_since is None:
+                    waiting_since = time.monotonic()
+            else:
+                waiting_since = None
             if after_hand_number is not None and obs.hand_number == after_hand_number:
                 continue
             if obs.hand_over:
@@ -267,7 +311,7 @@ class BluffedTableEnv:
 
             self._send({"type": "sit", "buyIn": self.buy_in})
             try:
-                obs = self._await_turn_or_terminal(timeout=self.step_timeout)
+                obs = self._await_turn_or_terminal(timeout=self.step_timeout, lonely_wait_timeout=_LONELY_WAIT_TIMEOUT)
             except TableError as exc:
                 if exc.code in _TRANSIENT_SIT_ERRORS and attempt < _MAX_SIT_ATTEMPTS:
                     # Table assignment is a soft, best-effort index (see
@@ -280,6 +324,19 @@ class BluffedTableEnv:
                     # usually enough to land somewhere that actually fits.
                     self._emit("retrying_seat", {"attempt": attempt, "error": exc.code})
                     time.sleep(0.5)
+                    continue
+                raise
+            except StillWaitingAlone:
+                if attempt < _MAX_SIT_ATTEMPTS:
+                    # Same underlying cause as table_full above (a burst of
+                    # near-simultaneous connects fragmenting across tables),
+                    # just discovered by timing out alone instead of an
+                    # outright rejection — assignTable's atomic reservation
+                    # never oversells a seat, but it can't stop several
+                    # connects from landing on different tables when they
+                    # race close enough together. A fresh connect re-runs
+                    # assignment from scratch, same fix as table_full.
+                    self._emit("retrying_seat", {"attempt": attempt, "error": "still_waiting_alone"})
                     continue
                 raise
             self._seated = True
