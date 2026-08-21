@@ -345,6 +345,28 @@ def test_require_acted_false_is_unaffected_by_hasActed():
     assert obs.my_turn is True
 
 
+def test_recv_loop_answers_a_server_ping_with_a_pong():
+    # The server actively probes connections it can't otherwise tell are
+    # alive (see PING_CHECK_INTERVAL_MS server-side) — answered here, in the
+    # recv thread itself, not queued for the caller's main thread to notice.
+    # A slow strategy/LLM call blocking the main thread must not make an
+    # otherwise-healthy connection look dead.
+    env = BluffedTableEnv("bk_live_fake")
+    ws = ScriptedWs([{"type": "ping"}, _state_msg("waiting")])
+
+    thread = threading.Thread(target=env._recv_loop, args=(ws,), daemon=True)
+    thread.start()
+    try:
+        state_msg = env._messages.get(timeout=1.0)
+    finally:
+        ws.close()
+        thread.join(timeout=1.0)
+
+    assert state_msg["type"] == "state"  # the ping itself never reached the queue
+    sent = [json.loads(m) for m in ws.sent]
+    assert {"type": "pong"} in sent
+
+
 def test_reset_reconnects_when_marked_seated_but_the_connection_died(monkeypatch):
     # _seated only ever flips to False via leave()/close() — a socket that
     # died on its own (recv loop hit an exception and set _closed) leaves
