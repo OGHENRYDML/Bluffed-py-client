@@ -5,7 +5,7 @@ import threading
 import pytest
 
 from bluffed_client.env import BluffedTableEnv
-from bluffed_client.errors import TableError
+from bluffed_client.errors import StillWaitingAlone, TableError
 from bluffed_client.observation import parse_observation
 
 
@@ -267,6 +267,50 @@ def test_reset_gives_up_after_exhausting_retries(monkeypatch):
     env = BluffedTableEnv("bk_live_fake", step_timeout=2.0, connect_timeout=1.0)
 
     with pytest.raises(TableError):
+        env.reset()
+
+
+def test_reset_retries_a_fresh_connect_after_being_alone_too_long(monkeypatch):
+    # assignTable's atomic reservation never oversells a table, but several
+    # near-simultaneous connects can still land on *different* tables
+    # instead of converging on one (a burst racing each other, not a
+    # correctness bug). The first socket here never gets a second player —
+    # exactly that: seatPlayer accepted the sit fine, nobody else is coming.
+    import bluffed_client.env as env_module
+
+    monkeypatch.setattr(env_module, "_LONELY_WAIT_TIMEOUT", 0.05)
+    sockets = [
+        ScriptedWs([_state_msg("waiting", max_seats=6)]),  # never fills — genuinely alone
+        ScriptedWs([_state_msg("preflop", current_turn_seat=0, hand_number=1)]),
+    ]
+    monkeypatch.setattr(env_module.websocket, "create_connection", lambda url, timeout: sockets.pop(0))
+
+    env = BluffedTableEnv("bk_live_fake", step_timeout=2.0, connect_timeout=1.0)
+    events = []
+    env.on_event = lambda kind, data: events.append((kind, data))
+
+    obs, _info = env.reset()
+
+    assert obs.hand_number == 1
+    assert env._seated is True
+    kinds = [k for k, _d in events]
+    assert kinds == ["connecting", "connected", "waiting_for_players", "retrying_seat", "connecting", "connected"]
+    assert events[3][1]["error"] == "still_waiting_alone"
+
+
+def test_reset_gives_up_after_repeatedly_landing_alone(monkeypatch):
+    import bluffed_client.env as env_module
+
+    monkeypatch.setattr(env_module, "_LONELY_WAIT_TIMEOUT", 0.05)
+    monkeypatch.setattr(
+        env_module.websocket,
+        "create_connection",
+        lambda url, timeout: ScriptedWs([_state_msg("waiting", max_seats=6)]),
+    )
+
+    env = BluffedTableEnv("bk_live_fake", step_timeout=2.0, connect_timeout=1.0)
+
+    with pytest.raises(StillWaitingAlone):
         env.reset()
 
 
