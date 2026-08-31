@@ -56,9 +56,12 @@ class Observation:
         raise this turn, in USDC micros. Both ends are legal, and so is
         everything between them. None if raising isn't legal right now
         (not enough chips behind to meet the table minimum — shoving is
-        still allowed via `allin`, just not as a `raise`)."""
+        still allowed via `allin`, just not as a `raise`). Also None once
+        the player has already acted this street: the no-reopen rule (a
+        short all-in below the min-raise doesn't reopen betting) means
+        there is no legal raise to make — the server enforces the same."""
         me = self.me
-        if me is None or me.folded or me.all_in:
+        if me is None or me.folded or me.all_in or me.has_acted:
             return None
         owed = self.current_bet - me.bet
         stack_behind = me.chips
@@ -83,7 +86,13 @@ class Observation:
             actions.append(Action("call"))
 
         stack_behind = me.chips
-        if stack_behind > max(owed, 0):
+        if me.has_acted:
+            # Already acted this street: only a shove that is a pure call
+            # (chips can't cover what's owed) is still legal — never a
+            # re-raise (no-reopen rule, mirrors the server engine).
+            if owed > 0 and stack_behind <= owed:
+                actions.append(Action("allin"))
+        elif stack_behind > max(owed, 0):
             actions.append(Action("allin"))
             bounds = self.raise_bounds()
             if bounds is not None:
