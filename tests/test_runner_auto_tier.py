@@ -80,8 +80,8 @@ def test_pick_tier_for_balance_picks_richest_affordable():
 
 
 def test_pick_tier_for_balance_falls_back_to_smallest_when_broke():
-    tier = runner_module._pick_tier_for_balance(1)  # can't even cover t_pico's minimum
-    assert tier.id == "t_pico"
+    tier = runner_module._pick_tier_for_balance(1)  # can't even cover t_free's minimum
+    assert tier.id == "t_free"
 
 
 def test_pick_tier_for_balance_picks_top_tier_when_rich():
