@@ -144,7 +144,19 @@ class BluffedTableEnv:
     def _send(self, payload: dict) -> None:
         if not self._ws:
             raise BluffedError("not connected — call reset() first")
-        self._ws.send(json.dumps(payload))
+        try:
+            self._ws.send(json.dumps(payload))
+        except BluffedError:
+            raise
+        except Exception as e:
+            # A dropped socket raises a raw websocket/OSError here, not a
+            # BluffedError — left unwrapped, it used to bypass every
+            # BluffedError/TableError handler downstream (step()'s
+            # connection_lost fallback, reset()'s sit-retry loop, the MCP
+            # server's error translation, the CLI's ClickException wrapping)
+            # and surface as an unhandled traceback instead of the
+            # documented failure path.
+            raise BluffedError(str(e)) from e
 
     def _next_message(self, timeout: float) -> dict:
         try:

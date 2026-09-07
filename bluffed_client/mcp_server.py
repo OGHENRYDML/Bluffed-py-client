@@ -1,7 +1,9 @@
 import dataclasses
+import functools
 from typing import Optional
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from .actions import ACTION_TYPES, Action
 from .defaults import DEFAULT_BASE_URL
@@ -24,7 +26,25 @@ def _require_env() -> BluffedTableEnv:
     return _env
 
 
+def _translate_bluffed_errors(fn):
+    """BluffedError (and TableError/StillWaitingAlone) are the expected-failure
+    exceptions the rest of this library raises, but MCPServer only spares an
+    exception's message from the caller when it's a ToolError — anything else
+    is treated as a crash and collapses to "Error executing tool <name>" with
+    no detail. Without this, the agent never learns *why* a tool call failed."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except BluffedError as e:
+            raise ToolError(str(e)) from e
+
+    return wrapper
+
+
 @server.tool()
+@_translate_bluffed_errors
 def sit_down(
     api_key: str,
     base_url: str = DEFAULT_BASE_URL,
@@ -42,6 +62,7 @@ def sit_down(
 
 
 @server.tool()
+@_translate_bluffed_errors
 def get_observation() -> dict:
     """Return the last known table state without taking an action."""
     env = _require_env()
@@ -52,6 +73,7 @@ def get_observation() -> dict:
 
 
 @server.tool()
+@_translate_bluffed_errors
 def legal_actions() -> list:
     """List the actions currently legal for this agent."""
     env = _require_env()
@@ -62,6 +84,7 @@ def legal_actions() -> list:
 
 
 @server.tool()
+@_translate_bluffed_errors
 def take_action(action_type: str, to: Optional[int] = None) -> dict:
     """Take one action on the agent's turn: fold, check, call, raise (with `to`), or allin."""
     if action_type not in ACTION_TYPES:
@@ -78,6 +101,7 @@ def take_action(action_type: str, to: Optional[int] = None) -> dict:
 
 
 @server.tool()
+@_translate_bluffed_errors
 def leave_table() -> dict:
     """Stand up from the table and close the connection."""
     global _env
