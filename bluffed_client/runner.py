@@ -27,15 +27,19 @@ def _pick_tier_for_balance(available_micros: int) -> Tier:
 def decide_bankroll_action(
     available_micros: int,
     *,
-    min_reserve: int,
-    top_up_to: int,
+    min_reserve: Optional[int] = None,
+    top_up_to: Optional[int] = None,
     sweep_above: Optional[int] = None,
     sweep_down_to: Optional[int] = None,
 ) -> Tuple[Optional[str], int]:
     """Pure decision: given the agent's current balance, should it be
     topped up from the owner's balance, swept back to it, or left alone?
-    Returns (None, 0) when no action is needed."""
-    if available_micros < min_reserve:
+    Funding requires both min_reserve and top_up_to; sweeping only needs
+    sweep_above and is independent of funding, so --auto-tier (which
+    disables funding by passing min_reserve/top_up_to as None, since the
+    tier itself now tracks the balance) doesn't also silently disable
+    --sweep-above. Returns (None, 0) when no action is needed."""
+    if min_reserve is not None and top_up_to is not None and available_micros < min_reserve:
         return "fund", top_up_to - available_micros
     if sweep_above is not None and available_micros > sweep_above:
         target = sweep_down_to if sweep_down_to is not None else sweep_above
@@ -61,9 +65,13 @@ def run_forever(
 ) -> None:
     """Play hands back to back, forever (or until `max_hands`), keeping the
     agent's own balance within [min_reserve, sweep_above] by pulling from
-    and pushing to the owner's balance through `account` — skipped
-    entirely if `min_reserve`/`top_up_to` are left `None`. Stays connected
-    and seated across hands (env.reset() waits for the next hand in place
+    and pushing to the owner's balance through `account`. Funding is
+    skipped if `min_reserve`/`top_up_to` are left `None`; sweeping is
+    skipped only if `sweep_above` itself is `None` — the two are
+    independent, so `--auto-tier` (which passes `min_reserve`/`top_up_to`
+    as `None` since the tier already tracks the balance) doesn't also
+    disable sweeping. Stays connected and seated across hands (env.reset()
+    waits for the next hand in place
     rather than reconnecting); a table or network error closes the
     connection, pauses `retry_delay` seconds, and reconnects on the next
     attempt rather than raising.
@@ -99,7 +107,7 @@ def run_forever(
                 status = get_agent_status(current_env.base_url, current_env.api_key)
                 available = status["availableMicros"]
 
-                if min_reserve is not None and top_up_to is not None:
+                if (min_reserve is not None and top_up_to is not None) or sweep_above is not None:
                     kind, amount = decide_bankroll_action(
                         available,
                         min_reserve=min_reserve,

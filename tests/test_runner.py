@@ -33,3 +33,20 @@ def test_no_action_in_the_middle():
     )
     assert kind is None
     assert amount == 0
+
+
+def test_sweeps_even_with_funding_disabled():
+    # This is the --auto-tier case: the CLI passes min_reserve/top_up_to
+    # as None (the tier itself tracks the balance instead), but
+    # --sweep-above must still take effect — it isn't bundled with funding.
+    kind, amount = decide_bankroll_action(
+        12_000_000, sweep_above=10_000_000, sweep_down_to=6_000_000
+    )
+    assert kind == "sweep"
+    assert amount == 6_000_000
+
+
+def test_no_fund_when_reserve_config_missing():
+    kind, amount = decide_bankroll_action(1_000_000, sweep_above=10_000_000)
+    assert kind is None
+    assert amount == 0
